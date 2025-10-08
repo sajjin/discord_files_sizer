@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # File Server - Hosts uploaded files
+  file-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: discord-file-server
+    restart: unless-stopped
+    environment:
+      - PORT=51424
+      - API_KEY=${API_KEY}
+      - DOMAIN=${DOMAIN}
+      - NODE_ENV=production
+      - FILE_RETENTION_DAYS=${FILE_RETENTION_DAYS:-30}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./server/server.js:/app/server.js:ro
+      - ./server/package.json:/app/package.json:ro
+    networks:
+      - discord-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:51424/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Discord Bot - Processes uploads and manages commands
+  discord-bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: discord-upload-bot
+    restart: unless-stopped
+    ports:
+      - "8458:8458"
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - FILE_SERVER_URL=http://file-server:51424
+      - FILE_SERVER_API_KEY=${API_KEY}
+      - UPLOAD_PORT=8458
+      - PUBLIC_UPLOAD_URL=${PUBLIC_UPLOAD_URL}
+      - MONITORED_CHANNELS=${MONITORED_CHANNELS:-}
+      - MONITORED_USERS=${MONITORED_USERS:-}
+      - DELETE_ORIGINAL=${DELETE_ORIGINAL:-false}
+      - ADD_REACTION=${ADD_REACTION:-true}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-5000}
+    volumes:
+      - ./bot-temp:/app/temp
+      - ./direct-uploads:/app/direct-uploads
+      - ./bot/bot.js:/app/bot.js:ro
+      - ./bot/package.json:/app/package.json:ro
+    networks:
+      - discord-network
+    depends_on:
+      file-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8458/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Cloudflare Tunnel - Exposes services securely
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    networks:
+      - discord-network
+    depends_on:
+      file-server:
+        condition: service_healthy
+      discord-bot:
+        condition: service_healthy
+
+networks:
+  discord-network:
+    driver: bridge
+    name: discord-network
+
+volumes:
+  uploads:
+    name: discord-uploads
+  bot-temp:
+    name: discord-bot-temp
+  direct-uploads:
+    name: discord-direct-uploads

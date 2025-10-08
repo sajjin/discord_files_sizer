@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Server Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #fff;
+        }
+        .container {
+            background: #2d2d2d;
+            padding: 30px;
+            border-radius: 8px;
+        }
+        input, button {
+            display: block;
+            width: 100%;
+            margin: 10px 0;
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 4px;
+            border: 1px solid #444;
+        }
+        input {
+            background: #1e1e1e;
+            color: #fff;
+        }
+        button {
+            background: #5865f2;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #4752c4;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #1e1e1e;
+            border-radius: 4px;
+            min-height: 50px;
+            word-wrap: break-word;
+        }
+        .success {
+            color: #43b581;
+        }
+        .error {
+            color: #f04747;
+        }
+        h1 {
+            color: #5865f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 File Server Test</h1>
+        
+        <label>Server URL:</label>
+        <input type="text" id="serverUrl" value="http://localhost:3000">
+        
+        <label>API Key:</label>
+        <input type="password" id="apiKey" value="your-secret-api-key">
+        
+        <button onclick="testHealth()">Test Server Connection</button>
+        
+        <label>Upload a File:</label>
+        <input type="file" id="fileInput">
+        <button onclick="testUpload()">Upload File</button>
+        
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const resultDiv = document.getElementById('result');
+
+        function showResult(message, isError = false) {
+            resultDiv.className = isError ? 'error' : 'success';
+            resultDiv.innerHTML = message;
+        }
+
+        async function testHealth() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            showResult('Testing connection...');
+            
+            try {
+                const response = await fetch(`${serverUrl}/health`);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showResult(`✅ Server is running!<br>Status: ${data.status}<br>Time: ${data.timestamp}`);
+                } else {
+                    showResult(`❌ Server responded with error: ${response.status}`, true);
+                }
+            } catch (error) {
+                showResult(`❌ Connection failed: ${error.message}<br><br>Make sure your server is running with:<br><code>docker-compose up -d</code>`, true);
+            }
+        }
+
+        async function testUpload() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const apiKey = document.getElementById('apiKey').value;
+            const fileInput = document.getElementById('fileInput');
+            
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showResult('❌ Please select a file first!', true);
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            showResult(`Uploading ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const response = await fetch(`${serverUrl}/upload`, {
+                    method: 'POST',
+                    headers: {
+                        'X-API-Key': apiKey
+                    },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showResult(`
+                        ✅ Upload successful!<br><br>
+                        <strong>File URL:</strong><br>
+                        <a href="${data.url}" target="_blank" style="color: #5865f2;">${data.url}</a><br><br>
+                        <strong>Original Name:</strong> ${data.originalName}<br>
+                        <strong>Size:</strong> ${(data.size / 1024 / 1024).toFixed(2)} MB<br>
+                        <strong>Type:</strong> ${data.mimeType}
+                    `);
+                } else {
+                    showResult(`❌ Upload failed: ${data.error || 'Unknown error'}<br>Status: ${response.status}`, true);
+                }
+            } catch (error) {
+                showResult(`❌ Upload error: ${error.message}`, true);
+            }
+        }
+
+        // Auto-test connection on load
+        window.addEventListener('load', () => {
+            setTimeout(testHealth, 500);
+        });
+    </script>
+</body>
+</html>

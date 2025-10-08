@@ -1,0 +1,5 @@
+.env
+direct-uploads/
+uploads/
+temp/
+node_modules/
