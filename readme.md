@@ -399,7 +399,7 @@ If this project helped you bypass Discord's file limits, give it a star! ⭐
 - [x] Direct upload web page
 - [x] Cloudflare Zero Trust integration
 - [x] Docker deployment
-- [x] Management scripts
+- [ ] Management scripts
 - [ ] Thumbnail generation for videos
 - [ ] File compression options
 - [ ] User upload quotas
