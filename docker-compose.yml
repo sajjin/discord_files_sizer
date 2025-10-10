@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # File Server - Hosts uploaded files
+  # File Server - Hosts uploaded files with chunked upload support
   file-server:
     build:
       context: ./server
@@ -14,12 +14,20 @@ services:
       - DOMAIN=${DOMAIN}
       - NODE_ENV=production
       - FILE_RETENTION_DAYS=${FILE_RETENTION_DAYS:-30}
+      - NODE_OPTIONS=--max-old-space-size=4096 --max-http-header-size=16384
     volumes:
       - ./uploads:/app/uploads
+      - ./chunks:/app/chunks
       - ./server/server.js:/app/server.js:ro
       - ./server/package.json:/app/package.json:ro
     networks:
       - discord-network
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:51424/health"]
       interval: 30s
@@ -27,7 +35,7 @@ services:
       retries: 5
       start_period: 60s
 
-  # Discord Bot - Processes uploads and manages commands
+  # Discord Bot - Processes uploads with chunked support
   discord-bot:
     build:
       context: ./bot
@@ -47,16 +55,23 @@ services:
       - DELETE_ORIGINAL=${DELETE_ORIGINAL:-false}
       - ADD_REACTION=${ADD_REACTION:-true}
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-5000}
+      - NODE_OPTIONS=--max-old-space-size=4096 --max-http-header-size=16384
     volumes:
       - ./bot-temp:/app/temp
       - ./direct-uploads:/app/direct-uploads
       - ./bot/bot.js:/app/bot.js:ro
-      - ./bot/package.json:/app/package.json:ro
+      - ./bot/bot.js:/app/bot.js
     networks:
       - discord-network
     depends_on:
       file-server:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8458/health"]
       interval: 30s
@@ -64,7 +79,7 @@ services:
       retries: 5
       start_period: 60s
 
-  # Cloudflare Tunnel - Exposes services securely
+  # Cloudflare Tunnel - Exposes services securely (handles chunks < 100s each)
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared-tunnel
@@ -88,6 +103,8 @@ networks:
 volumes:
   uploads:
     name: discord-uploads
+  chunks:
+    name: discord-chunks
   bot-temp:
     name: discord-bot-temp
   direct-uploads:

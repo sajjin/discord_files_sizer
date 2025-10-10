@@ -36,6 +36,13 @@ User types /upload → Bot sends private link → User uploads via web page
 → Bypasses Discord completely → Bot posts rich embed in channel
 ```
 
+## Method A: if file is less then 100MB
+The file will upload in whole all at once
+
+
+## Method B: if file is more than 100MB
+The file will be seperated into 50MB and sent in chunks and then reassebled by the server after a chunks recived this is to get by the 100 second timer for cloudflares zero trust tunnel on the free tier.
+
 ---
 
 ## 📦 What You Get

@@ -3,3 +3,6 @@ direct-uploads/
 uploads/
 temp/
 node_modules/
+nginx/
+bot-temp/
+chunks/
