@@ -14,10 +14,17 @@ const DOMAIN = process.env.DOMAIN || 'http://file-server';
 const FILE_RETENTION_DAYS = parseInt(process.env.FILE_RETENTION_DAYS) || 30;
 const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks (safe for Cloudflare)
 
-// Increase timeouts
+// Increase timeouts - critical for external uploads
 app.use((req, res, next) => {
-    req.setTimeout(300000); // 5 minutes per chunk
-    res.setTimeout(300000);
+    req.setTimeout(600000); // 10 minutes per chunk
+    res.setTimeout(600000);
+    next();
+});
+
+// Keep connections alive
+app.use((req, res, next) => {
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Keep-Alive', 'timeout=600, max=1000');
     next();
 });
 
@@ -59,7 +66,13 @@ const chunkUpload = multer({
     storage: chunkStorage,
     limits: {
         fileSize: 100 * 1024 * 1024, // 100MB per chunk
-        fieldSize: 100 * 1024 * 1024
+        fieldSize: 100 * 1024 * 1024,
+        fields: 10,
+        files: 1
+    },
+    fileFilter: (req, file, cb) => {
+        console.log(`   📧 Multer fileFilter - file: ${file.fieldname}, size: ${file.size}`);
+        cb(null, true);
     }
 });
 
@@ -144,15 +157,36 @@ app.post('/upload/init', requireApiKey, async (req, res) => {
 });
 
 // Upload chunk
-app.post('/upload/chunk', requireApiKey, chunkUpload.single('chunk'), async (req, res) => {
+app.post('/upload/chunk', requireApiKey, (req, res, next) => {
+    // Add request tracking
+    console.log(`\n📦 Chunk upload request received:`);
+    console.log(`   Content-Length: ${req.headers['content-length']}`);
+    console.log(`   Upload ID: ${req.headers['x-upload-id']}`);
+    console.log(`   Chunk Index: ${req.headers['x-chunk-index']}`);
+    console.log(`   Total Chunks: ${req.headers['x-total-chunks']}`);
+    
+    // Track request data
+    let dataReceived = 0;
+    req.on('data', (chunk) => {
+        dataReceived += chunk.length;
+    });
+    
+    req.on('error', (error) => {
+        console.error(`   ❌ Request stream error: ${error.message}`);
+    });
+    
+    next();
+}, chunkUpload.single('chunk'), async (req, res) => {
     try {
         const uploadId = req.headers['x-upload-id'];
         const chunkIndex = parseInt(req.headers['x-chunk-index']);
         const totalChunks = parseInt(req.headers['x-total-chunks']);
         
-        console.log(`\n📦 Chunk upload request:`);
-        console.log(`   Upload ID: ${uploadId}`);
-        console.log(`   Chunk: ${chunkIndex + 1}/${totalChunks}`);
+        console.log(`   📧 Multer completed - file received: ${!!req.file}`);
+        if (req.file) {
+            console.log(`       File size: ${req.file.size}`);
+            console.log(`       File path: ${req.file.path}`);
+        }
         
         if (!uploadId || uploadId === 'undefined' || uploadId === 'null') {
             console.error(`   ❌ Invalid upload ID: ${uploadId}`);
@@ -173,6 +207,16 @@ app.post('/upload/chunk', requireApiKey, chunkUpload.single('chunk'), async (req
                     chunkIndex,
                     totalChunks
                 }
+            });
+        }
+        
+        if (!req.file) {
+            console.error(`   ❌ No file data received from multer`);
+            return res.status(400).json({ 
+                success: false,
+                error: 'No file data received',
+                chunkIndex,
+                uploadId
             });
         }
         
@@ -368,8 +412,7 @@ app.get('/e/:filename', async (req, res) => {
         
         const stats = await fs.stat(filePath);
         const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
-        const displayName = filename;
-        
+        const displayName = filename;        
         const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -449,6 +492,11 @@ app.get('/e/:filename', async (req, res) => {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(88, 101, 242, 0.4);
         }
+        .download-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
         .direct-link {
             margin-top: 20px;
             padding: 15px;
@@ -458,6 +506,10 @@ app.get('/e/:filename', async (req, res) => {
             font-size: 14px;
             word-wrap: break-word;
         }
+        .error { color: #c0392b; padding: 15px; background: #fadbd8; border-radius: 8px; margin: 15px 0; display: none; }
+        .loading { display: inline-block; margin-left: 10px; }
+        .loading::after { content: '...'; animation: dots 1.5s steps(4, end) infinite; }
+        @keyframes dots { 0%, 20% { content: '.'; } 40% { content: '..'; } 60%, 100% { content: '...'; } }
     </style>
 </head>
 <body>
@@ -465,16 +517,18 @@ app.get('/e/:filename', async (req, res) => {
         <h1>📁 ${displayName}</h1>
         <div class="info">Size: ${fileSizeMB} MB • Type: ${mimeType.split('/')[0]}</div>
         
-        <div class="media-container">
+        <div class="error" id="loadError"></div>
+        
+        <div class="media-container" id="mediaContainer">
             ${isVideo ? `
-                <video controls autoplay muted loop>
+                <video controls autoplay loop id="mediaElement" onerror="handleMediaError()">
                     <source src="${fileUrl}" type="${mimeType}">
                     Your browser does not support the video tag.
                 </video>
             ` : isImage ? `
-                <img src="${fileUrl}" alt="${displayName}">
+                <img src="${fileUrl}" alt="${displayName}" id="mediaElement" onerror="handleMediaError()">
             ` : isAudio ? `
-                <audio controls autoplay>
+                <audio controls autoplay id="mediaElement" onerror="handleMediaError()">
                     <source src="${fileUrl}" type="${mimeType}">
                     Your browser does not support the audio tag.
                 </audio>
@@ -486,9 +540,95 @@ app.get('/e/:filename', async (req, res) => {
             `}
         </div>
         
-        <a href="${fileUrl}" download="${displayName}" class="download-btn">⬇️ Download File</a>
+        <button onclick="downloadFile()" class="download-btn">⬇️ Download File<span class="loading" id="downloadLoading" style="display:none;"></span></button>
         <a href="${fileUrl}" target="_blank" class="download-btn" style="background: #43b581;">🔗 Open Direct Link</a>
     </div>
+    
+    <script>
+        let retryCount = 0;
+        const maxRetries = 5;
+        const fileUrl = '${fileUrl}';
+        
+        // Handle media load errors with retry
+        function handleMediaError() {
+            retryCount++;
+            const errorDiv = document.getElementById('loadError');
+            
+            if (retryCount >= maxRetries) {
+                errorDiv.textContent = 'Failed to load after multiple attempts. Please refresh the page or use the download button.';
+                errorDiv.style.display = 'block';
+                return;
+            }
+            
+            errorDiv.textContent = \`Loading... (Attempt \${retryCount + 1}/\${maxRetries + 1})\`;
+            errorDiv.style.display = 'block';
+            
+            // Retry after delay (exponential backoff)
+            setTimeout(() => {
+                const mediaElement = document.getElementById('mediaElement');
+                if (mediaElement && mediaElement.src) {
+                    // Force reload by adding cache buster
+                    mediaElement.src = fileUrl + '?t=' + Date.now();
+                    mediaElement.load();
+                }
+            }, 1000 * retryCount);
+        }
+        
+        // Download with retry
+        async function downloadFile() {
+            const btn = event.target.closest('button');
+            const loading = document.getElementById('downloadLoading');
+            let attempts = 0;
+            
+            async function attemptDownload() {
+                attempts++;
+                try {
+                    loading.style.display = 'inline';
+                    btn.disabled = true;
+                    
+                    const response = await fetch(fileUrl);
+                    
+                    if (!response.ok) {
+                        throw new Error(\`HTTP \${response.status}\`);
+                    }
+                    
+                    // Use blob download for better reliability
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = '${displayName}';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                    
+                    loading.style.display = 'none';
+                    btn.disabled = false;
+                } catch (error) {
+                    if (attempts < 3) {
+                        console.log(\`Download attempt \${attempts} failed, retrying...\`);
+                        setTimeout(attemptDownload, 2000 * attempts);
+                    } else {
+                        loading.style.display = 'none';
+                        btn.disabled = false;
+                        document.getElementById('loadError').textContent = 'Download failed: ' + error.message;
+                        document.getElementById('loadError').style.display = 'block';
+                    }
+                }
+            }
+            
+            attemptDownload();
+        }
+        
+        // Monitor media loading
+        const mediaElement = document.getElementById('mediaElement');
+        if (mediaElement) {
+            mediaElement.addEventListener('canplay', () => {
+                document.getElementById('loadError').style.display = 'none';
+            });
+        }
+    </script>
 </body>
 </html>`;
         
@@ -601,7 +741,20 @@ app.delete('/api/files/:filename', requireApiKey, async (req, res) => {
 // Error handling
 app.use((err, req, res, next) => {
     console.error('Server error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error stack:', err.stack);
+    
+    // Handle multer errors
+    if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'File too large', message: err.message });
+    }
+    if (err.code === 'LIMIT_FIELD_COUNT') {
+        return res.status(400).json({ error: 'Too many fields', message: err.message });
+    }
+    if (err.code === 'LIMIT_FIELD_SIZE') {
+        return res.status(413).json({ error: 'Field too large', message: err.message });
+    }
+    
+    res.status(500).json({ error: 'Internal server error', message: err.message });
 });
 
 // Cleanup stale uploads (every hour)
@@ -619,7 +772,7 @@ setInterval(async () => {
     }
 }, 3600000);
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Domain: ${DOMAIN}`);
     console.log(`Chunk size: ${(CHUNK_SIZE / 1024 / 1024).toFixed(0)} MB`);
@@ -629,6 +782,32 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`   • Resume support\n`);
     
     startAutomaticCleanup();
+});
+
+// Configure server socket settings for keep-alive
+server.keepAliveTimeout = 65000; // 65 seconds
+server.headersTimeout = 66000; // 66 seconds - must be > keepAliveTimeout
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('\n🔴 SIGTERM received, shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+    // Force close after 30 seconds
+    setTimeout(() => {
+        console.error('❌ Forced shutdown');
+        process.exit(1);
+    }, 30000);
+});
+
+process.on('SIGINT', () => {
+    console.log('\n🔴 SIGINT received, shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
 });
 
 // File retention cleanup

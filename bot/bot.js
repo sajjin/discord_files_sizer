@@ -6,6 +6,8 @@ const fsSync = require('fs');
 const path = require('path');
 const express = require('express');
 const multer = require('multer');
+const http = require('http');
+const https = require('https');
 
 // Configuration
 const config = {
@@ -473,6 +475,8 @@ app.post('/upload/:token/finalize', async (req, res) => {
         };
         
         console.log(`📨 Sending to Discord channel: ${uploadInfo.channelId}`);
+        const user = await client.users.fetch(uploadInfo.userId).catch(() => null);
+        fileInfo.uploaderName = user ? user.tag : 'Unknown';
         await sendFilesToDiscord(channel, [fileInfo], []);
         
         res.json({ success: true });
@@ -504,8 +508,9 @@ app.post('/upload/:token/submit-regular', upload.single('file'), async (req, res
             mimeType: fileData.mimeType
         };
         
-        console.log(`📨 Sending to Discord channel: ${uploadInfo.channelId}`);
         const channel = await client.channels.fetch(uploadInfo.channelId);
+        const user = await client.users.fetch(uploadInfo.userId).catch(() => null);
+        fileInfo.uploaderName = user ? user.tag : 'Unknown';
         await sendFilesToDiscord(channel, [fileInfo], []);
         
         res.json({ success: true });
@@ -542,9 +547,37 @@ client.once('ready', async () => {
     }
     
     // Start upload server
-    app.listen(config.uploadPort, '0.0.0.0', () => {
+    const server = app.listen(config.uploadPort, '0.0.0.0', () => {
         console.log(`✅ Upload server running on port ${config.uploadPort}`);
         console.log(`🔗 Public URL: ${config.publicUploadUrl}`);
+    });
+    
+    // Configure server socket settings for keep-alive
+    server.keepAliveTimeout = 65000; // 65 seconds
+    server.headersTimeout = 66000; // 66 seconds - must be > keepAliveTimeout
+    
+    // Graceful shutdown
+    process.on('SIGTERM', () => {
+        console.log('\n🔴 SIGTERM received, shutting down gracefully...');
+        server.close(() => {
+            console.log('✅ Server closed');
+            client.destroy();
+            process.exit(0);
+        });
+        // Force close after 30 seconds
+        setTimeout(() => {
+            console.error('❌ Forced shutdown');
+            process.exit(1);
+        }, 30000);
+    });
+    
+    process.on('SIGINT', () => {
+        console.log('\n🔴 SIGINT received, shutting down gracefully...');
+        server.close(() => {
+            console.log('✅ Server closed');
+            client.destroy();
+            process.exit(0);
+        });
     });
 });
 
@@ -623,6 +656,7 @@ client.on('messageCreate', async (message) => {
                     url: fileData.url,
                     name: fileData.originalName || attachment.name,
                     size: fileData.size || attachment.size,
+                    uploaderName: message.author.tag,
                     mimeType: fileData.mimeType
                 });
                 
@@ -649,7 +683,7 @@ client.on('messageCreate', async (message) => {
             console.log(`\n📤 Sending ${uploadedFiles.length} file(s) to Discord...`);
             
             try {
-                await sendFilesToDiscord(message.channel, uploadedFiles, errors);
+                await sendFilesToDiscord(message.channel, uploadedFiles, errors, message.author.tag);
                 
                 if (config.deleteOriginal && message.deletable) {
                     setTimeout(() => {
@@ -674,57 +708,29 @@ client.on('messageCreate', async (message) => {
 
 async function sendFilesToDiscord(channel, files, errors) {
     try {
-        console.log(`\n💬 Sending to Discord channel: ${channel.name}`);
+        console.log(`\n⏳ Waiting 5 seconds before posting to Discord...`);
+
+        // Wait 5 seconds
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        console.log(`💬 Sending to Discord channel: ${channel.name}`);
         console.log(`   Files to send: ${files.length}`);
         
-        // Create rich embeds for each file
+        // Send each file URL with uploader name (automatically included in file object)
         for (const file of files) {
-            console.log(`   📨 Creating embed for: ${file.name}`);
-            
-            const isVideo = file.mimeType?.startsWith('video/');
-            const isImage = file.mimeType?.startsWith('image/');
-            const isAudio = file.mimeType?.startsWith('audio/');
-            
-            const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
-            
-            let emoji = '📄';
-            let typeLabel = 'File';
-            if (isVideo) { emoji = '🎬'; typeLabel = 'Video'; }
-            else if (isImage) { emoji = '🖼️'; typeLabel = 'Image'; }
-            else if (isAudio) { emoji = '🎵'; typeLabel = 'Audio'; }
-            
-            const embed = new EmbedBuilder()
-                .setColor(0x5865f2)
-                .setTitle(`${emoji} ${file.name}`)
-                .setURL(file.url)
-                .setDescription(`**[⬇️ Click to Download/View](${file.url})**`)
-                .addFields(
-                    { name: 'Type', value: typeLabel, inline: true },
-                    { name: 'Size', value: `${fileSizeMB} MB`, inline: true }
-                )
-                .setTimestamp()
-                .setFooter({ text: '🔒 Hosted on your private server • No Discord limits' });
-            
-            if (isImage) {
-                embed.setImage(file.url);
-            }
-            
-            await channel.send({ embeds: [embed] });
-            console.log(`   ✅ Sent embed for: ${file.name}`);
-        }
-        
-        if (files.length > 1) {
-            const totalSizeMB = (files.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024).toFixed(2);
-            await channel.send(
-                `✅ **${files.length} files uploaded!** Total: ${totalSizeMB} MB`
-            );
+            console.log(`   📨 Sending URL for: ${file.name}`);
+            const message = file.uploaderName 
+                ? `**Uploaded by:** ${file.uploaderName}\n${file.url}` 
+                : file.url;
+            await channel.send(message);
+            console.log(`   ✅ Sent URL for: ${file.name}`);
         }
         
         if (errors.length > 0) {
             await channel.send(`⚠️ **Some files failed:**\n${errors.join('\n')}`);
         }
         
-        console.log(`✅ Successfully sent all messages to Discord\n`);
+        console.log(`✅ Successfully sent all URLs to Discord\n`);
     } catch (error) {
         console.error(`❌ Error sending to Discord:`, error);
         throw error;
@@ -803,32 +809,52 @@ async function uploadChunkedToServer(filePath, originalName, fileSize) {
                 
                 await fileHandle.read(buffer, 0, length, start);
                 
-                const form = new FormData();
-                form.append('chunk', buffer, { filename: `chunk_${i}` });
-                
                 console.log(`   Uploading chunk ${i + 1}/${totalChunks}...`);
                 
-                const chunkResponse = await axios({
-                    method: 'post',
-                    url: `${config.fileServerUrl}/upload/chunk`,
-                    headers: {
-                        ...form.getHeaders(),
-                        'X-API-Key': config.apiKey,
-                        'X-Upload-ID': uploadId,
-                        'X-Chunk-Index': String(i),
-                        'X-Total-Chunks': String(totalChunks)
-                    },
-                    data: form,
-                    maxContentLength: Infinity,
-                    maxBodyLength: Infinity,
-                    timeout: 300000
-                });
+                // Retry logic for chunk uploads
+                let chunkResponse;
+                let retries = 0;
+                const maxRetries = 3;
                 
-                if (!chunkResponse.data || !chunkResponse.data.success) {
-                    throw new Error(`Chunk ${i} failed: ${JSON.stringify(chunkResponse.data)}`);
+                while (retries < maxRetries) {
+                    try {
+                        const form = new FormData();
+                        form.append('chunk', buffer, { filename: `chunk_${i}` });
+                        
+                        chunkResponse = await axios({
+                            method: 'post',
+                            url: `${config.fileServerUrl}/upload/chunk`,
+                            headers: {
+                                ...form.getHeaders(),
+                                'X-API-Key': config.apiKey,
+                                'X-Upload-ID': uploadId,
+                                'X-Chunk-Index': String(i),
+                                'X-Total-Chunks': String(totalChunks),
+                                'Connection': 'keep-alive'
+                            },
+                            data: form,
+                            maxContentLength: Infinity,
+                            maxBodyLength: Infinity,
+                            timeout: 600000,  // 10 minutes
+                            httpAgent: new http.Agent({ keepAlive: true, keepAliveMsecs: 10000 }),
+                            httpsAgent: new https.Agent({ keepAlive: true, keepAliveMsecs: 10000 })
+                        });
+                        
+                        if (!chunkResponse.data || !chunkResponse.data.success) {
+                            throw new Error(`Chunk ${i} failed: ${JSON.stringify(chunkResponse.data)}`);
+                        }
+                        
+                        console.log(`   ✓ Chunk ${i + 1}/${totalChunks} (${chunkResponse.data.progress}%)`);
+                        break; // Success, exit retry loop
+                    } catch (error) {
+                        retries++;
+                        if (retries >= maxRetries) {
+                            throw new Error(`Chunk ${i} failed after ${maxRetries} retries: ${error.message}`);
+                        }
+                        console.warn(`   ⚠️  Chunk ${i + 1} failed, retrying (${retries}/${maxRetries})...`);
+                        await new Promise(resolve => setTimeout(resolve, 2000 * retries)); // Exponential backoff
+                    }
                 }
-                
-                console.log(`   ✓ Chunk ${i + 1}/${totalChunks} (${chunkResponse.data.progress}%)`);
             }
         } finally {
             await fileHandle.close();
@@ -845,9 +871,11 @@ async function uploadChunkedToServer(filePath, originalName, fileSize) {
             url: `${config.fileServerUrl}/upload/finalize`,
             headers: {
                 'X-API-Key': config.apiKey,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Connection': 'keep-alive'
             },
-            data: finalData
+            data: finalData,
+            timeout: 300000
         });
         
         console.log(`   Finalize response:`, JSON.stringify(finalResponse.data));

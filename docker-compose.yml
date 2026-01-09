@@ -8,32 +8,32 @@ services:
       dockerfile: Dockerfile
     container_name: discord-file-server
     restart: unless-stopped
+    ports:
+      - "51424:51424"
     environment:
       - PORT=51424
       - API_KEY=${API_KEY}
-      - DOMAIN=${DOMAIN}
+      - DOMAIN=${FILE_SERVER_URL}
       - NODE_ENV=production
       - FILE_RETENTION_DAYS=${FILE_RETENTION_DAYS:-30}
       - NODE_OPTIONS=--max-old-space-size=4096 --max-http-header-size=16384
     volumes:
-      - ./uploads:/app/uploads
-      - ./chunks:/app/chunks
+      - /mnt/spare-nvme/discord-uploader-volumes/uploads:/app/uploads
+      - /mnt/spare-nvme/discord-uploader-volumes/chunks:/app/chunks
       - ./server/server.js:/app/server.js:ro
       - ./server/package.json:/app/package.json:ro
     networks:
       - discord-network
     deploy:
       resources:
-        limits:
-          memory: 4G
         reservations:
-          memory: 1G
+          memory: 2G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:51424/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      interval: 20s
+      timeout: 5s
+      retries: 2
+      start_period: 120s
 
   # Discord Bot - Processes uploads with chunked support
   discord-bot:
@@ -57,8 +57,8 @@ services:
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-5000}
       - NODE_OPTIONS=--max-old-space-size=4096 --max-http-header-size=16384
     volumes:
-      - ./bot-temp:/app/temp
-      - ./direct-uploads:/app/direct-uploads
+      - /mnt/spare-nvme/discord-uploader-volumes/bot-temp:/app/temp
+      - /mnt/spare-nvme/discord-uploader-volumes/direct-uploads:/app/direct-uploads
       - ./bot/bot.js:/app/bot.js:ro
       - ./bot/bot.js:/app/bot.js
     networks:
@@ -68,32 +68,36 @@ services:
         condition: service_healthy
     deploy:
       resources:
-        limits:
-          memory: 4G
         reservations:
-          memory: 1G
+          memory: 2G
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8458/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      interval: 20s
+      timeout: 5s
+      retries: 2
+      start_period: 120s
 
-  # Cloudflare Tunnel - Exposes services securely (handles chunks < 100s each)
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared-tunnel
+  # Apache Reverse Proxy - Runs alongside Nextcloud
+  apache-proxy:
+    image: httpd:2.4
+    container_name: discord-apache-proxy
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    ports:
+      - "8880:80"
+      - "8443:443"
+    volumes:
+      - ./apache-discord-files.conf:/usr/local/apache2/conf/extra/discord-files.conf:ro
+      - ./ssl:/usr/local/apache2/conf/ssl:ro
+      - ./apache/httpd.conf:/usr/local/apache2/conf/httpd.conf:ro
     networks:
       - discord-network
     depends_on:
       file-server:
         condition: service_healthy
-      discord-bot:
-        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          memory: 512M
 
 networks:
   discord-network:
