@@ -3,15 +3,16 @@
  * @description Redirects drag-and-dropped Discord attachments to your external server, then pastes or sends the returned link automatically.
  * @version 1.0.0
  * @author Sajjin Nijjar
- * @authorId 000000000000000000
- * @source https://github.com/sajjin/discord_files_sizer
+ * @authorLink https://github.com/sajjin/discord_files_sizer
+ * @source https://github.com/sajjin/discord_files_sizer/tree/main
+ * @updateUrl https://raw.githubusercontent.com/sajjin/discord_files_sizer/main/FileRedirectUpload.plugin.js
  */
 
 module.exports = class FileRedirectUpload {
 	constructor() {
 		this.meta = {
 			name: "FileRedirectUpload",
-			authors: [{ name: "Sajjin Nijjar", discord_id: "000000000000000000" }],
+			authors: [{ name: "Sajjin Nijjar" }],
 			description: "Redirects drag-and-dropped Discord attachments to your external server, then pastes or sends the returned link automatically.",
 			version: "1.0.0"
 		};
