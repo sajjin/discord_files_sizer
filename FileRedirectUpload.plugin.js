@@ -4,7 +4,7 @@
  * @version 1.0.0
  * @author Sajjin Nijjar
  * @authorId 000000000000000000
- * @source https://github.com/sajjin/discord_file_sizer
+ * @source https://github.com/sajjin/discord_files_sizer
  */
 
 module.exports = class FileRedirectUpload {
