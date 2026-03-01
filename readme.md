@@ -6,23 +6,23 @@ Upload files of **any size** to Discord and automatically store them on your own
 
 ---
 
-## ✨ Features
+## Features
 
-- 🚀 **Unlimited file sizes** - No Discord limits! (configurable, default 5GB)
-- 💎 **Rich embeds** - Professional looking file cards in Discord
-- 🔗 **Dual upload methods** - Normal Discord upload OR `/upload` command
-- 🖼️ **Image previews** - Thumbnails show inline
-- 🎬 **Video support** - One-click to view
-- 🗑️ **Automatic cleanup** - Files auto-delete after 30 days (configurable)
-- 🔒 **Private server** - Your files, your control
-- 📦 **Docker deployment** - Easy setup with Docker Compose
-- 🛡️ **Apache Server** - Secure public access
-- ⚡ **Automatic processing** - Intercepts normal Discord uploads
-- 🎯 **Direct upload** - Web interface bypasses Discord entirely
+- **Unlimited file sizes** - No Discord limits! (configurable, default 5GB)
+- **Rich embeds** - Professional looking file cards in Discord
+- **Dual upload methods** - Normal Discord upload OR `/upload` command
+- **Image previews** - Thumbnails show inline
+- **Video support** - One-click to view
+- **Automatic cleanup** - Files auto-delete after 30 days (configurable)
+- **Private server** - Your files, your control
+- **Docker deployment** - Easy setup with Docker Compose
+- **Apache Server** - Secure public access
+- **Automatic processing** - Intercepts normal Discord uploads
+- **Direct upload** - Web interface bypasses Discord entirely
 
 ---
 
-## 🎬 How It Works
+## How It Works
 
 ### Method 1: Normal Discord Upload (Automatic)
 ```
@@ -45,7 +45,7 @@ The file will be seperated into 50MB and sent in chunks and then reassebled by t
 
 ---
 
-## 📦 What You Get
+## What You Get
 
 ### File Server
 - Hosts your uploaded files
@@ -63,7 +63,7 @@ The file will be seperated into 50MB and sent in chunks and then reassebled by t
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Server with Docker & Docker Compose
@@ -84,11 +84,11 @@ docker compose -f .\docker-compose.yml up -d
 # Type: /upload
 ```
 
-**That's it!** 🎉
+**That's it!**
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 discord-file-server/
@@ -112,14 +112,14 @@ discord-file-server/
 
 ---
 
-## 🎮 Usage Examples
+## Usage Examples
 
 ### Upload via Discord (Automatic) currently not working
 
 ```
 User: [Drags video.mp4 (500MB) to Discord]
 
-Bot: ⏳ (reaction)
+Bot: (reaction)
 
 Bot posts:
 ┌─────────────────────────┐
@@ -176,7 +176,7 @@ tar -czf backup.tar.gz uploads/
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### `.env` File
 
@@ -209,7 +209,7 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ---
 
-## 📊 Architecture
+## Architecture
 
 ```
 ┌─────────────────┐
@@ -243,7 +243,7 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ---
 
-## 🔐 Security Features
+## Security Features
 
 ✅ **Cloudflare Zero Trust** - No open ports, secure tunnels  
 ✅ **API Key Authentication** - Secure file uploads  
@@ -255,7 +255,7 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ---
 
-## 🎯 Use Cases
+## Use Cases
 
 ### Perfect For:
 
@@ -285,7 +285,7 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ---
 
-## 📈 Performance
+## Performance
 
 **Tested with:**
 - ✅ 5GB files - Works perfectly
@@ -301,7 +301,7 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Bot Not Responding
 ```bash
@@ -331,7 +331,7 @@ docker-compose logs discord-bot | grep "command registered"
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete setup guide
 - **[.env.example](.env.example)** - Configuration reference
@@ -340,7 +340,7 @@ docker-compose logs discord-bot | grep "command registered"
 
 ---
 
-## 🔄 Updates
+## Updates
 
 ```bash
 # Pull latest changes
@@ -356,7 +356,7 @@ docker-compose up -d --build
 
 ---
 
-## 💾 Backups
+## Backups
 
 ### Automatic Backups
 
@@ -370,7 +370,7 @@ crontab -e
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Found a bug? Have a feature request? 
 
@@ -380,19 +380,19 @@ Found a bug? Have a feature request?
 
 ---
 
-## 📝 License
+## License
 
 This project is open source and available for personal and commercial use.
 
 ---
 
-## ⭐ Show Your Support
+## Show Your Support
 
 If this project helped you bypass Discord's file limits, give it a star! ⭐
 
 ---
 
-## 🎉 Features Roadmap
+## Features Roadmap
 
 - [x] Automatic upload interception
 - [x] Rich embeds
@@ -400,7 +400,6 @@ If this project helped you bypass Discord's file limits, give it a star! ⭐
 - [x] Direct upload web page
 - [x] Cloudflare Zero Trust integration
 - [x] Docker deployment
-- [ ] Management scripts
 - [ ] Thumbnail generation for videos
 - [ ] File compression options
 - [ ] User upload quotas
@@ -409,6 +408,4 @@ If this project helped you bypass Discord's file limits, give it a star! ⭐
 
 ---
 
-Made with ❤️ for the Discord community
-
-**No more file size limits. Your files. Your server. Your control.** 🔒
+**No more file size limits. Your files. Your server. Your control.**
