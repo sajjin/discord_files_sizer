@@ -16,8 +16,8 @@ const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks (safe for Cloudflare)
 
 // Increase timeouts - critical for external uploads
 app.use((req, res, next) => {
-    req.setTimeout(600000); // 10 minutes per chunk
-    res.setTimeout(600000);
+    req.setTimeout(900000); // 15 minutes per chunk
+    res.setTimeout(900000);
     next();
 });
 
@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Upload-ID', 'X-Chunk-Index', 'X-Total-Chunks', 'X-File-Name', 'X-File-Size'],
+    allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Upload-ID', 'X-Chunk-Index', 'X-Total-Chunks', 'X-File-Name', 'X-File-Size', 'X-Retry-Count'],
     exposedHeaders: ['Content-Length', 'Content-Type']
 }));
 
@@ -50,10 +50,11 @@ const activeUploads = new Map();
 
 // Configure multer for chunks
 const chunkStorage = multer.diskStorage({
-    destination: async (req, file, cb) => {
+    destination: (req, file, cb) => {
         const uploadId = req.headers['x-upload-id'];
         const uploadDir = path.join(chunksDir, uploadId);
-        await fs.mkdir(uploadDir, { recursive: true });
+        fsSync.mkdirSync(uploadDir, { recursive: true });
+        console.log(`   📁 Chunk directory prepared: ${uploadDir}`);
         cb(null, uploadDir);
     },
     filename: (req, file, cb) => {
@@ -65,8 +66,8 @@ const chunkStorage = multer.diskStorage({
 const chunkUpload = multer({
     storage: chunkStorage,
     limits: {
-        fileSize: 100 * 1024 * 1024, // 100MB per chunk
-        fieldSize: 100 * 1024 * 1024,
+        fileSize: 500 * 1024 * 1024, // 500MB per chunk (increased from 100MB)
+        fieldSize: 500 * 1024 * 1024,
         fields: 10,
         files: 1
     },
@@ -91,8 +92,8 @@ const storage = multer.diskStorage({
 const upload = multer({
     storage: storage,
     limits: {
-        fileSize: 100 * 1024 * 1024, // 100MB for regular uploads
-        fieldSize: 100 * 1024 * 1024
+        fileSize: 500 * 1024 * 1024, // 500MB for regular uploads (increased from 100MB)
+        fieldSize: 500 * 1024 * 1024
     }
 });
 
@@ -164,16 +165,7 @@ app.post('/upload/chunk', requireApiKey, (req, res, next) => {
     console.log(`   Upload ID: ${req.headers['x-upload-id']}`);
     console.log(`   Chunk Index: ${req.headers['x-chunk-index']}`);
     console.log(`   Total Chunks: ${req.headers['x-total-chunks']}`);
-    
-    // Track request data
-    let dataReceived = 0;
-    req.on('data', (chunk) => {
-        dataReceived += chunk.length;
-    });
-    
-    req.on('error', (error) => {
-        console.error(`   ❌ Request stream error: ${error.message}`);
-    });
+    console.log(`   Retry Count: ${req.headers['x-retry-count'] || 0}`);
     
     next();
 }, chunkUpload.single('chunk'), async (req, res) => {
@@ -181,6 +173,7 @@ app.post('/upload/chunk', requireApiKey, (req, res, next) => {
         const uploadId = req.headers['x-upload-id'];
         const chunkIndex = parseInt(req.headers['x-chunk-index']);
         const totalChunks = parseInt(req.headers['x-total-chunks']);
+        const retryCount = parseInt(req.headers['x-retry-count'] || '0');
         
         console.log(`   📧 Multer completed - file received: ${!!req.file}`);
         if (req.file) {
@@ -238,6 +231,7 @@ app.post('/upload/chunk', requireApiKey, (req, res, next) => {
         const progress = Math.round((uploadInfo.receivedChunks.size / totalChunks) * 100);
         
         console.log(`   ✓ Chunk ${chunkIndex + 1}/${totalChunks} received (${progress}%)`);
+        console.log(`   ✓ Total uploaded: ${uploadInfo.receivedChunks.size}/${totalChunks} chunks`);
         
         res.json({
             success: true,
@@ -276,7 +270,9 @@ app.post('/upload/finalize', requireApiKey, async (req, res) => {
             return res.status(400).json({
                 error: 'Not all chunks received',
                 received: uploadInfo.receivedChunks.size,
-                expected: uploadInfo.totalChunks
+                expected: uploadInfo.totalChunks,
+                missing: Array.from({length: uploadInfo.totalChunks}, (_, i) => i)
+                    .filter(i => !uploadInfo.receivedChunks.has(i))
             });
         }
         
@@ -289,14 +285,16 @@ app.post('/upload/finalize', requireApiKey, async (req, res) => {
         const finalPath = path.join(uploadsDir, finalFileName);
         const chunksPath = path.join(chunksDir, uploadId);
         
-        // Assemble chunks
-        const writeStream = fsSync.createWriteStream(finalPath);
+        // Use faster stream-based assembly
+        const writeStream = fsSync.createWriteStream(finalPath, { flags: 'w', encoding: null });
         
         for (let i = 0; i < uploadInfo.totalChunks; i++) {
             const chunkPath = path.join(chunksPath, `chunk_${i}`);
             const chunkData = await fs.readFile(chunkPath);
             writeStream.write(chunkData);
-            console.log(`   ↪ Merged chunk ${i + 1}/${uploadInfo.totalChunks}`);
+            if ((i + 1) % 5 === 0 || i === uploadInfo.totalChunks - 1) {
+                console.log(`   ↪ Merged chunk ${i + 1}/${uploadInfo.totalChunks}`);
+            }
         }
         
         writeStream.end();
@@ -312,8 +310,10 @@ app.post('/upload/finalize', requireApiKey, async (req, res) => {
         
         console.log(`✅ File assembled: ${sizeMB} MB`);
         
-        // Clean up chunks
-        await fs.rm(chunksPath, { recursive: true, force: true });
+        // Clean up chunks in background (don't block response)
+        fs.rm(chunksPath, { recursive: true, force: true }).catch(err => {
+            console.error(`Failed to clean up chunks for ${uploadId}:`, err);
+        });
         activeUploads.delete(uploadId);
         
         // Generate URLs
@@ -336,7 +336,7 @@ app.post('/upload/finalize', requireApiKey, async (req, res) => {
         
     } catch (error) {
         console.error('Finalize error:', error);
-        res.status(500).json({ error: 'Failed to finalize upload' });
+        res.status(500).json({ error: 'Failed to finalize upload', message: error.message });
     }
 });
 

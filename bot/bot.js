@@ -520,6 +520,25 @@ app.post('/upload/:token/submit-regular', upload.single('file'), async (req, res
     }
 });
 
+// Set up Express app
+const uploadApp = express();
+const uploadMiddleware = multer({ dest: 'uploads/' }); // Directory to store uploaded files
+
+// Endpoint to handle file uploads
+uploadApp.post('/upload', uploadMiddleware.single('file'), (req, res) => {
+    if (!req.file) {
+        return res.status(400).send('No file uploaded.');
+    }
+    // Here you can handle the file (e.g., send it to the Discord server)
+    console.log(`File uploaded: ${req.file.originalname}`);
+    res.send('File uploaded successfully.');
+});
+
+// Start the Express server
+uploadApp.listen(config.uploadPort, () => {
+    console.log(`File upload server running on port ${config.uploadPort}`);
+});
+
 // Bot ready
 client.once('ready', async () => {
     console.log(`✅ Bot logged in as ${client.user.tag}`);

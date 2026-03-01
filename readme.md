@@ -16,7 +16,7 @@ Upload files of **any size** to Discord and automatically store them on your own
 - 🗑️ **Automatic cleanup** - Files auto-delete after 30 days (configurable)
 - 🔒 **Private server** - Your files, your control
 - 📦 **Docker deployment** - Easy setup with Docker Compose
-- 🛡️ **Cloudflare Zero Trust** - Secure public access
+- 🛡️ **Apache Server** - Secure public access
 - ⚡ **Automatic processing** - Intercepts normal Discord uploads
 - 🎯 **Direct upload** - Web interface bypasses Discord entirely
 
@@ -60,12 +60,6 @@ The file will be seperated into 50MB and sent in chunks and then reassebled by t
 - `/upload` command for direct uploads
 - Web interface for file uploads
 - Automatic file processing
-
-### Cloudflare Tunnel
-- Secure public access
-- Zero open ports
-- HTTPS automatically
-- DDoS protection
 
 ---
 
