@@ -36,12 +36,12 @@ User types /upload → Bot sends private link → User uploads via web page
 → Bypasses Discord completely → Bot posts rich embed in channel
 ```
 
-## Method A: if file is less then 100MB
+## Method A: if file is less than 100MB
 The file will upload in whole all at once
 
 
 ## Method B: if file is more than 100MB
-The file will be seperated into 50MB and sent in chunks and then reassebled by the server after a chunks recived this is to get by the 100 second timer for cloudflares zero trust tunnel on the free tier.
+The file will be seperated into 50MB and sent in chunks and then reassebled by the server after a chunks received this is to get by the 100 second timer for cloudflares zero trust tunnel on the free tier.
 
 ---
 
@@ -245,13 +245,13 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ## Security Features
 
-✅ **Cloudflare Zero Trust** - No open ports, secure tunnels  
-✅ **API Key Authentication** - Secure file uploads  
-✅ **HTTPS Automatic** - Cloudflare provides SSL  
-✅ **DDoS Protection** - Cloudflare's network  
-✅ **Rate Limiting** - Built-in and configurable  
-✅ **Private Uploads** - `/upload` links are private  
-✅ **Token Expiration** - Upload links expire in 15 min  
+**Cloudflare Zero Trust** - No open ports, secure tunnels  
+**API Key Authentication** - Secure file uploads  
+**HTTPS Automatic** - Cloudflare provides SSL  
+**DDoS Protection** - Cloudflare's network  
+**Rate Limiting** - Built-in and configurable  
+**Private Uploads** - `/upload` links are private  
+**Token Expiration** - Upload links expire in 15 min  
 
 ---
 
@@ -270,28 +270,28 @@ MONITORED_USERS=             # Specific users (empty = all)
 
 ### Not Limited By:
 
-- ❌ Discord's 25MB free limit
-- ❌ Discord's 500MB Nitro limit
-- ❌ Upload speed restrictions
-- ❌ Storage quotas
+- Discord's 25MB free limit
+- Discord's 500MB Nitro limit
+- Upload speed restrictions
+- Storage quotas
 
 ### You Control:
 
-- ✅ File size limits (default 5GB, configurable)
-- ✅ Storage duration (your server, your rules)
-- ✅ Who can upload (channel/user filters)
-- ✅ What gets deleted (original messages)
-- ✅ Everything!
+- File size limits (default 5GB, configurable)
+- Storage duration (your server, your rules)
+- Who can upload (channel/user filters)
+- What gets deleted (original messages)
+- Everything!
 
 ---
 
 ## Performance
 
 **Tested with:**
-- ✅ 5GB files - Works perfectly
-- ✅ Multiple simultaneous uploads
-- ✅ Mobile uploads
-- ✅ Desktop uploads
+- 5GB files - Works perfectly
+- Multiple simultaneous uploads
+- Mobile uploads
+- Desktop uploads
 
 **Resource Usage:**
 - CPU: Low (mostly idle)
@@ -388,7 +388,7 @@ This project is open source and available for personal and commercial use.
 
 ## Show Your Support
 
-If this project helped you bypass Discord's file limits, give it a star! ⭐
+If this project helped you bypass Discord's file limits, give it a star!
 
 ---
 
