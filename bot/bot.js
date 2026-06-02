@@ -469,6 +469,8 @@ app.post('/upload/:token/finalize', async (req, res) => {
         // Normalize response structure for Discord
         const fileInfo = {
             url: response.data.url,
+            fileUrl: response.data.fileUrl,
+            previewUrl: response.data.previewUrl,
             name: response.data.originalName || response.data.filename,
             size: response.data.size,
             mimeType: response.data.mimeType
@@ -503,6 +505,8 @@ app.post('/upload/:token/submit-regular', upload.single('file'), async (req, res
         // Normalize response structure for Discord
         const fileInfo = {
             url: fileData.url,
+            fileUrl: fileData.fileUrl,
+            previewUrl: fileData.previewUrl,
             name: fileData.originalName || req.file.originalname,
             size: fileData.size || req.file.size,
             mimeType: fileData.mimeType
@@ -520,27 +524,8 @@ app.post('/upload/:token/submit-regular', upload.single('file'), async (req, res
     }
 });
 
-// Set up Express app
-const uploadApp = express();
-const uploadMiddleware = multer({ dest: 'uploads/' }); // Directory to store uploaded files
-
-// Endpoint to handle file uploads
-uploadApp.post('/upload', uploadMiddleware.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).send('No file uploaded.');
-    }
-    // Here you can handle the file (e.g., send it to the Discord server)
-    console.log(`File uploaded: ${req.file.originalname}`);
-    res.send('File uploaded successfully.');
-});
-
-// Start the Express server
-uploadApp.listen(config.uploadPort, () => {
-    console.log(`File upload server running on port ${config.uploadPort}`);
-});
-
 // Bot ready
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     console.log(`✅ Bot logged in as ${client.user.tag}`);
     console.log(`📦 Chunked uploads enabled for files > ${(config.chunkThreshold / 1024 / 1024).toFixed(0)}MB`);
     console.log(`🔧 File server: ${config.fileServerUrl}`);
@@ -673,6 +658,8 @@ client.on('messageCreate', async (message) => {
                 // Normalize response structure
                 uploadedFiles.push({
                     url: fileData.url,
+                    fileUrl: fileData.fileUrl,
+                    previewUrl: fileData.previewUrl,
                     name: fileData.originalName || attachment.name,
                     size: fileData.size || attachment.size,
                     uploaderName: message.author.tag,
@@ -738,9 +725,25 @@ async function sendFilesToDiscord(channel, files, errors) {
         // Send each file URL with uploader name (automatically included in file object)
         for (const file of files) {
             console.log(`   📨 Sending URL for: ${file.name}`);
-            const message = file.uploaderName 
-                ? `**Uploaded by:** ${file.uploaderName}\n${file.url}` 
-                : file.url;
+            const previewLink = file.url || file.previewUrl || file.fileUrl;
+            const fullLink = file.fileUrl || file.url;
+            const messageLines = [];
+
+            if (file.uploaderName) {
+                messageLines.push(`**Uploaded by:** ${file.uploaderName}`);
+            }
+
+            if (file.previewUrl || file.url) {
+                messageLines.push('This is a preview:');
+                messageLines.push(previewLink);
+            }
+
+            if (fullLink) {
+                messageLines.push('Full version:');
+                messageLines.push(fullLink);
+            }
+
+            const message = messageLines.join('\n');
             await channel.send(message);
             console.log(`   ✅ Sent URL for: ${file.name}`);
         }

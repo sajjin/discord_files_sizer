@@ -155,20 +155,21 @@ module.exports = class FileRedirectUpload {
 		for (const file of files) {
 			try {
 				BdApi.UI.showToast(`Uploading ${file.name}...`, { type: "info" });
-				const link = await this.uploadFile(file);
-				const embedLink = link.replace("/files/", "/e/");
-				console.log(`[${this.meta.name}] Uploaded ${file.name}: ${embedLink}`);
-				if (!link) continue;
+				const uploadResult = await this.uploadFile(file);
+				if (!uploadResult) continue;
+
+				const formattedMessage = this.buildBotStyleMessage(uploadResult);
+				console.log(`[${this.meta.name}] Uploaded ${file.name}:`, uploadResult);
 
 				if (this.settings.copyToClipboard) {
-					DiscordNative.clipboard.copy(embedLink);
-					BdApi.UI.showToast("Link copied to clipboard!", { type: "success" });
+					DiscordNative.clipboard.copy(formattedMessage);
+					BdApi.UI.showToast("Preview + full links copied to clipboard!", { type: "success" });
 				}
 
 				if (this.settings.autoSend && channelId && this.messageActions?.sendMessage) {
-					this.messageActions.sendMessage(channelId, { content: embedLink }, {});
+					this.messageActions.sendMessage(channelId, { content: formattedMessage }, {});
 				} else {
-					this.insertIntoComposer(embedLink);
+					this.insertIntoComposer(formattedMessage);
 				}
 
 				BdApi.UI.showToast(`Uploaded ${file.name}`, { type: "success" });
@@ -201,6 +202,33 @@ module.exports = class FileRedirectUpload {
 		return this.chunkedUpload(server, apiKey, file, chunkSize);
 	}
 
+	buildBotStyleMessage(uploadResult) {
+		const lines = [];
+
+		if (uploadResult.previewLink) {
+			lines.push("This is a preview:");
+			lines.push(uploadResult.previewLink);
+		}
+
+		if (uploadResult.fullLink) {
+			lines.push("Full version:");
+			lines.push(uploadResult.fullLink);
+		}
+
+		return lines.join("\n");
+	}
+
+	normalizeUploadResult(uploadData) {
+		const previewLink = uploadData.url || uploadData.previewUrl || uploadData.fileUrl || "";
+		const fullLink = uploadData.fileUrl || uploadData.url || uploadData.previewUrl || "";
+
+		if (!previewLink && !fullLink) {
+			throw new Error("No URL returned from server");
+		}
+
+		return { previewLink, fullLink };
+	}
+
 	async directUpload(server, apiKey, file) {
 		const form = new FormData();
 		form.append("file", file, file.name);
@@ -215,9 +243,7 @@ module.exports = class FileRedirectUpload {
 		}
 		const data = await res.json();
 		if (!data.success) throw new Error(data.error || "Unknown error");
-		const url = data.url || data.fileUrl;
-		if (!url) throw new Error("No URL returned from server");
-		return url;
+		return this.normalizeUploadResult(data);
 	}
 
 	async chunkedUpload(server, apiKey, file, chunkSize) {
@@ -306,6 +332,6 @@ module.exports = class FileRedirectUpload {
 		if (!finalizeRes.ok) throw new Error(`Finalize failed: ${finalizeRes.status}`);
 		const finalizeData = await finalizeRes.json();
 		if (!finalizeData.success) throw new Error(finalizeData.error || "Finalize error");
-		return finalizeData.fileUrl || finalizeData.url;
+		return this.normalizeUploadResult(finalizeData);
 	}
 };

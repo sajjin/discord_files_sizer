@@ -570,7 +570,7 @@ app.get('/e/:filename', async (req, res) => {
         
         const stats = await fs.stat(filePath);
         const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
-        const displayName = filename;        
+        const displayName = isPreview ? `${filename} (30s Preview)` : filename;
         const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -699,7 +699,7 @@ app.get('/e/:filename', async (req, res) => {
         </div>
         
         ${isPreview ? `<div class="info" style="font-size:14px; margin-top:-10px;">Preview clip shown for embed compatibility. Use Download for the full original file.</div>` : ''}
-        <button onclick="downloadFile()" class="download-btn">⬇️ Download File<span class="loading" id="downloadLoading" style="display:none;"></span></button>
+        <button onclick="downloadFile()" class="download-btn">⬇️ Full Clip<span class="loading" id="downloadLoading" style="display:none;"></span></button>
         <a href="${fileUrl}" target="_blank" class="download-btn" style="background: #43b581;">🔗 Open Direct Link</a>
     </div>
     
