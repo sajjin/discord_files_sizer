@@ -2,8 +2,8 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Install wget for health checks
-RUN apk add --no-cache wget
+# Install runtime tools
+RUN apk add --no-cache wget ffmpeg
 
 # Copy package files
 COPY package*.json ./

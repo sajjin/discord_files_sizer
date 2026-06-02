@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const fs = require('fs').promises;
 const fsSync = require('fs');
 const cors = require('cors');
@@ -13,6 +14,8 @@ const API_KEY = process.env.API_KEY || 'your-secret-api-key';
 const DOMAIN = process.env.DOMAIN || 'http://file-server';
 const FILE_RETENTION_DAYS = parseInt(process.env.FILE_RETENTION_DAYS) || 30;
 const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks (safe for Cloudflare)
+const PREVIEW_TRIGGER_BYTES = 100 * 1024 * 1024;
+const PREVIEW_DURATION_SECONDS = 30;
 
 // Increase timeouts - critical for external uploads
 app.use((req, res, next) => {
@@ -42,11 +45,131 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }));
 // Create directories
 const uploadsDir = path.join(__dirname, 'uploads');
 const chunksDir = path.join(__dirname, 'chunks');
+const previewsDir = path.join(uploadsDir, 'previews');
 fs.mkdir(uploadsDir, { recursive: true });
 fs.mkdir(chunksDir, { recursive: true });
+fs.mkdir(previewsDir, { recursive: true });
 
 // Track active chunked uploads
 const activeUploads = new Map();
+
+function getMimeInfo(filename) {
+    const ext = path.extname(filename).toLowerCase();
+    const detectedMimeType = mime.lookup(filename) || 'application/octet-stream';
+
+    // Discord often fails to render MKV when advertised as video/x-matroska.
+    // Advertise MKV as video/webm for embed metadata and direct serving.
+    const normalizedMimeType = ext === '.mkv' ? 'video/webm' : detectedMimeType;
+
+    return {
+        ext,
+        detectedMimeType,
+        normalizedMimeType
+    };
+}
+
+function resolveUploadPath(requestedPath) {
+    const normalized = path.normalize(String(requestedPath || '')).replace(/^([.][.][\\/])+/, '');
+    const resolvedPath = path.resolve(path.join(uploadsDir, normalized));
+    const uploadsRoot = path.resolve(uploadsDir) + path.sep;
+
+    if (!resolvedPath.startsWith(uploadsRoot)) {
+        return null;
+    }
+
+    return resolvedPath;
+}
+
+function isVideoMimeType(mimeType) {
+    return (mimeType || '').startsWith('video/');
+}
+
+function getPreviewFilename(filename) {
+    return `${filename}.preview.mp4`;
+}
+
+async function generatePreviewIfNeeded(sourcePath, sourceFilename, mimeType, sizeBytes) {
+    if (!isVideoMimeType(mimeType) || sizeBytes <= PREVIEW_TRIGGER_BYTES) {
+        return null;
+    }
+
+    const previewFilename = getPreviewFilename(sourceFilename);
+    const previewPath = path.join(previewsDir, previewFilename);
+
+    try {
+        await fs.access(previewPath);
+        return previewFilename;
+    } catch {
+        // Preview doesn't exist yet, continue.
+    }
+
+    console.log(`🎬 Generating preview for ${sourceFilename}...`);
+
+    const ffmpegArgs = [
+        '-y',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-ss',
+        '0',
+        '-i',
+        sourcePath,
+        '-t',
+        String(PREVIEW_DURATION_SECONDS),
+        '-vf',
+        'scale=1280:-2:force_original_aspect_ratio=decrease',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '30',
+        '-maxrate',
+        '1800k',
+        '-bufsize',
+        '3600k',
+        '-pix_fmt',
+        'yuv420p',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '96k',
+        '-movflags',
+        '+faststart',
+        previewPath
+    ];
+
+    await new Promise((resolve, reject) => {
+        const child = spawn('ffmpeg', ffmpegArgs, { stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
+
+        child.on('error', (error) => {
+            reject(error);
+        });
+
+        child.on('close', (code) => {
+            if (code === 0) {
+                resolve();
+                return;
+            }
+
+            reject(new Error(`ffmpeg exited with code ${code}: ${stderr.trim()}`));
+        });
+    });
+
+    try {
+        const previewStats = await fs.stat(previewPath);
+        console.log(`🎬 Preview ready: ${previewFilename} (${(previewStats.size / 1024 / 1024).toFixed(2)} MB)`);
+    } catch {
+        // Ignore stat failures; return filename anyway.
+    }
+
+    return previewFilename;
+}
 
 // Configure multer for chunks
 const chunkStorage = multer.diskStorage({
@@ -320,6 +443,15 @@ app.post('/upload/finalize', requireApiKey, async (req, res) => {
         const fileUrl = `${DOMAIN}/files/${finalFileName}`;
         const embedUrl = `${DOMAIN}/e/${finalFileName}`;
         const mimeType = mime.lookup(uploadInfo.fileName) || 'application/octet-stream';
+        let previewFilename = null;
+
+        try {
+            previewFilename = await generatePreviewIfNeeded(finalPath, finalFileName, mimeType, stats.size);
+        } catch (previewError) {
+            console.error(`Preview generation failed for ${finalFileName}:`, previewError.message);
+        }
+
+        const previewUrl = previewFilename ? `${DOMAIN}/files/previews/${previewFilename}` : null;
         
         console.log(`File URL: ${fileUrl}`);
         console.log(`Embed URL: ${embedUrl}`);
@@ -328,6 +460,7 @@ app.post('/upload/finalize', requireApiKey, async (req, res) => {
             success: true,
             url: embedUrl,
             fileUrl: fileUrl,
+            previewUrl: previewUrl,
             filename: finalFileName,
             originalName: uploadInfo.fileName,
             size: stats.size,
@@ -370,6 +503,16 @@ app.post('/upload', requireApiKey, upload.single('file'), async (req, res) => {
 
         const fileUrl = `${DOMAIN}/files/${req.file.filename}`;
         const embedUrl = `${DOMAIN}/e/${req.file.filename}`;
+        const normalizedMime = getMimeInfo(req.file.originalname).normalizedMimeType;
+        let previewFilename = null;
+
+        try {
+            previewFilename = await generatePreviewIfNeeded(req.file.path, req.file.filename, normalizedMime, req.file.size);
+        } catch (previewError) {
+            console.error(`Preview generation failed for ${req.file.filename}:`, previewError.message);
+        }
+
+        const previewUrl = previewFilename ? `${DOMAIN}/files/previews/${previewFilename}` : null;
         
         console.log(`\n📁 File uploaded: ${req.file.originalname} -> ${req.file.filename}`);
         console.log(`   Size: ${(req.file.size / 1024 / 1024).toFixed(2)} MB`);
@@ -379,10 +522,11 @@ app.post('/upload', requireApiKey, upload.single('file'), async (req, res) => {
             success: true,
             url: embedUrl,
             fileUrl: fileUrl,
+            previewUrl: previewUrl,
             filename: req.file.filename,
             originalName: req.file.originalname,
             size: req.file.size,
-            mimeType: req.file.mimetype
+            mimeType: normalizedMime
         });
     } catch (error) {
         console.error('Upload error:', error);
@@ -402,13 +546,27 @@ app.get('/e/:filename', async (req, res) => {
             return res.status(404).send('File not found');
         }
         
-        const ext = path.extname(filename).toLowerCase();
-        const mimeType = mime.lookup(filename) || 'application/octet-stream';
+        const { ext, normalizedMimeType } = getMimeInfo(filename);
+        const mimeType = normalizedMimeType;
         const fileUrl = `${DOMAIN}/files/${filename}`;
+        const previewFilename = getPreviewFilename(filename);
+        const previewPath = path.join(previewsDir, previewFilename);
         
         const isVideo = mimeType.startsWith('video/');
         const isImage = mimeType.startsWith('image/');
         const isAudio = mimeType.startsWith('audio/');
+
+        let embedVideoUrl = fileUrl;
+        let isPreview = false;
+        if (isVideo) {
+            try {
+                await fs.access(previewPath);
+                embedVideoUrl = `${DOMAIN}/files/previews/${previewFilename}`;
+                isPreview = true;
+            } catch {
+                // Preview not available; fallback to original URL.
+            }
+        }
         
         const stats = await fs.stat(filePath);
         const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
@@ -422,14 +580,14 @@ app.get('/e/:filename', async (req, res) => {
     
     <meta property="og:type" content="${isVideo ? 'video.other' : isImage ? 'website' : 'website'}">
     <meta property="og:title" content="${displayName}">
-    <meta property="og:description" content="Uploaded file - ${fileSizeMB} MB">
+    <meta property="og:description" content="${isPreview ? `Preview clip • Full file ${fileSizeMB} MB` : `Uploaded file - ${fileSizeMB} MB`}">
     <meta property="og:url" content="${DOMAIN}/e/${filename}">
     <meta property="og:site_name" content="File Server">
     
     ${isVideo ? `
-    <meta property="og:video" content="${fileUrl}">
-    <meta property="og:video:secure_url" content="${fileUrl}">
-    <meta property="og:video:type" content="${mimeType}">
+    <meta property="og:video" content="${embedVideoUrl}">
+    <meta property="og:video:secure_url" content="${embedVideoUrl}">
+    <meta property="og:video:type" content="video/mp4">
     <meta property="og:video:width" content="1280">
     <meta property="og:video:height" content="720">
     ` : ''}
@@ -445,7 +603,7 @@ app.get('/e/:filename', async (req, res) => {
     <meta name="twitter:card" content="${isVideo ? 'player' : isImage ? 'summary_large_image' : 'summary'}">
     <meta name="twitter:title" content="${displayName}">
     <meta name="twitter:description" content="${fileSizeMB} MB">
-    ${isVideo ? `<meta name="twitter:player" content="${fileUrl}">` : ''}
+    ${isVideo ? `<meta name="twitter:player" content="${embedVideoUrl}">` : ''}
     ${isImage ? `<meta name="twitter:image" content="${fileUrl}">` : ''}
     
     <meta name="theme-color" content="#5865f2">
@@ -522,7 +680,7 @@ app.get('/e/:filename', async (req, res) => {
         <div class="media-container" id="mediaContainer">
             ${isVideo ? `
                 <video controls autoplay loop id="mediaElement" onerror="handleMediaError()">
-                    <source src="${fileUrl}" type="${mimeType}">
+                    <source src="${embedVideoUrl}" type="video/mp4">
                     Your browser does not support the video tag.
                 </video>
             ` : isImage ? `
@@ -540,6 +698,7 @@ app.get('/e/:filename', async (req, res) => {
             `}
         </div>
         
+        ${isPreview ? `<div class="info" style="font-size:14px; margin-top:-10px;">Preview clip shown for embed compatibility. Use Download for the full original file.</div>` : ''}
         <button onclick="downloadFile()" class="download-btn">⬇️ Download File<span class="loading" id="downloadLoading" style="display:none;"></span></button>
         <a href="${fileUrl}" target="_blank" class="download-btn" style="background: #43b581;">🔗 Open Direct Link</a>
     </div>
@@ -642,10 +801,46 @@ app.get('/e/:filename', async (req, res) => {
 });
 
 // Serve uploaded files
-app.get('/files/:filename', async (req, res) => {
+app.head('/files/*', async (req, res) => {
     try {
-        const filename = req.params.filename;
-        const filePath = path.join(uploadsDir, filename);
+        const requestedPath = req.params[0];
+        const filePath = resolveUploadPath(requestedPath);
+
+        if (!filePath) {
+            return res.status(400).end();
+        }
+
+        try {
+            await fs.access(filePath);
+        } catch (error) {
+            return res.status(404).end();
+        }
+
+        const { normalizedMimeType } = getMimeInfo(path.basename(filePath));
+        const stat = await fs.stat(filePath);
+
+        res.setHeader('Content-Type', normalizedMimeType);
+        res.setHeader('Content-Disposition', 'inline');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Content-Length', stat.size);
+
+        return res.status(200).end();
+    } catch (error) {
+        console.error('Error serving HEAD file response:', error);
+        return res.status(500).end();
+    }
+});
+
+app.get('/files/*', async (req, res) => {
+    try {
+        const requestedPath = req.params[0];
+        const filePath = resolveUploadPath(requestedPath);
+
+        if (!filePath) {
+            return res.status(400).json({ error: 'Invalid file path' });
+        }
         
         try {
             await fs.access(filePath);
@@ -653,7 +848,8 @@ app.get('/files/:filename', async (req, res) => {
             return res.status(404).json({ error: 'File not found' });
         }
         
-        const mimeType = mime.lookup(filename) || 'application/octet-stream';
+        const { normalizedMimeType } = getMimeInfo(path.basename(filePath));
+        const mimeType = normalizedMimeType;
         
         res.setHeader('Content-Type', mimeType);
         res.setHeader('Content-Disposition', 'inline');
