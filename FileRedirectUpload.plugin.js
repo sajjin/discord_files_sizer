@@ -159,11 +159,17 @@ module.exports = class FileRedirectUpload {
 				if (!uploadResult) continue;
 
 				const formattedMessage = this.buildBotStyleMessage(uploadResult);
+				const clipboardText = uploadResult.youtubeLink || formattedMessage;
 				console.log(`[${this.meta.name}] Uploaded ${file.name}:`, uploadResult);
 
 				if (this.settings.copyToClipboard) {
-					DiscordNative.clipboard.copy(formattedMessage);
-					BdApi.UI.showToast("Preview + full links copied to clipboard!", { type: "success" });
+					DiscordNative.clipboard.copy(clipboardText);
+					BdApi.UI.showToast(
+						uploadResult.youtubeLink
+							? "YouTube link copied to clipboard!"
+							: "Preview + full links copied to clipboard!",
+						{ type: "success" }
+					);
 				}
 
 				if (this.settings.autoSend && channelId && this.messageActions?.sendMessage) {
@@ -203,6 +209,10 @@ module.exports = class FileRedirectUpload {
 	}
 
 	buildBotStyleMessage(uploadResult) {
+		if (uploadResult.youtubeLink) {
+			return ["Watch on YouTube:", uploadResult.youtubeLink].join("\n");
+		}
+
 		const lines = [];
 
 		if (uploadResult.previewLink) {
@@ -219,6 +229,17 @@ module.exports = class FileRedirectUpload {
 	}
 
 	normalizeUploadResult(uploadData) {
+		const youtubeLink =
+			uploadData.youtubeUrl ||
+			uploadData.watchUrl ||
+			(this.isYouTubeUrl(uploadData.url) ? uploadData.url : "") ||
+			(this.isYouTubeUrl(uploadData.fileUrl) ? uploadData.fileUrl : "") ||
+			(this.isYouTubeUrl(uploadData.previewUrl) ? uploadData.previewUrl : "");
+
+		if (youtubeLink) {
+			return { previewLink: youtubeLink, fullLink: youtubeLink, youtubeLink };
+		}
+
 		const previewLink = uploadData.url || uploadData.previewUrl || uploadData.fileUrl || "";
 		const fullLink = uploadData.fileUrl || uploadData.url || uploadData.previewUrl || "";
 
@@ -227,6 +248,11 @@ module.exports = class FileRedirectUpload {
 		}
 
 		return { previewLink, fullLink };
+	}
+
+	isYouTubeUrl(value) {
+		if (!value || typeof value !== "string") return false;
+		return /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)/i.test(value);
 	}
 
 	async directUpload(server, apiKey, file) {

@@ -7,3 +7,4 @@ nginx/
 bot-temp/
 chunks/
 apache-discord-files.conf
+docker-compose.yml

@@ -8,6 +8,7 @@ const express = require('express');
 const multer = require('multer');
 const http = require('http');
 const https = require('https');
+const { google } = require('googleapis');
 
 // Configuration
 const config = {
@@ -24,8 +25,19 @@ const config = {
     monitoredUsers: process.env.MONITORED_USERS?.split(',') || [],
     deleteOriginal: process.env.DELETE_ORIGINAL === 'true',
     addReaction: process.env.ADD_REACTION !== 'false',
-    maxFileSize: parseInt(process.env.MAX_FILE_SIZE) || 5000
+    maxFileSize: parseInt(process.env.MAX_FILE_SIZE) || 5000,
+
+    youtubeEnabled: process.env.YOUTUBE_UPLOAD_ENABLED === 'true',
+    youtubeClientId: process.env.YOUTUBE_CLIENT_ID,
+    youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET,
+    youtubeRefreshToken: process.env.YOUTUBE_REFRESH_TOKEN,
+    youtubePrivacyStatus: process.env.YOUTUBE_PRIVACY_STATUS || 'unlisted',
+    youtubeCategoryId: process.env.YOUTUBE_CATEGORY_ID || '22'
 };
+
+const VIDEO_EXTENSIONS = new Set([
+    '.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi', '.wmv', '.flv', '.mpeg', '.mpg', '.3gp'
+]);
 
 const client = new Client({
     intents: [
@@ -206,7 +218,7 @@ app.get('/upload/:token', (req, res) => {
                     
                     <div class="selected-files" id="selectedFiles"></div>
                     
-                    <button type="submit" id="uploadBtn">Upload to Your Server</button>
+                    <button type="submit" id="uploadBtn">Upload Files</button>
                 </form>
                 
                 <div class="progress" id="progress">
@@ -465,20 +477,11 @@ app.post('/upload/:token/finalize', async (req, res) => {
         
         // Send to Discord
         const channel = await client.channels.fetch(uploadInfo.channelId);
-        
-        // Normalize response structure for Discord
-        const fileInfo = {
-            url: response.data.url,
-            fileUrl: response.data.fileUrl,
-            previewUrl: response.data.previewUrl,
-            name: response.data.originalName || response.data.filename,
-            size: response.data.size,
-            mimeType: response.data.mimeType
-        };
-        
-        console.log(`📨 Sending to Discord channel: ${uploadInfo.channelId}`);
         const user = await client.users.fetch(uploadInfo.userId).catch(() => null);
-        fileInfo.uploaderName = user ? user.tag : 'Unknown';
+        const uploaderName = user ? user.tag : 'Unknown';
+        const fileInfo = await mapServerFinalizeResultToTarget(response.data, uploaderName);
+
+        console.log(`📨 Sending to Discord channel: ${uploadInfo.channelId}`);
         await sendFilesToDiscord(channel, [fileInfo], []);
         
         res.json({ success: true });
@@ -499,22 +502,17 @@ app.post('/upload/:token/submit-regular', upload.single('file'), async (req, res
     
     try {
         console.log(`📤 Processing regular upload: ${req.file.originalname}`);
-        const fileData = await uploadToPrivateServer(req.file.path, req.file.originalname);
-        await fs.unlink(req.file.path).catch(() => {});
-        
-        // Normalize response structure for Discord
-        const fileInfo = {
-            url: fileData.url,
-            fileUrl: fileData.fileUrl,
-            previewUrl: fileData.previewUrl,
-            name: fileData.originalName || req.file.originalname,
-            size: fileData.size || req.file.size,
-            mimeType: fileData.mimeType
-        };
-        
-        const channel = await client.channels.fetch(uploadInfo.channelId);
         const user = await client.users.fetch(uploadInfo.userId).catch(() => null);
-        fileInfo.uploaderName = user ? user.tag : 'Unknown';
+        const uploaderName = user ? user.tag : 'Unknown';
+        const fileData = await uploadFileWithRouting(req.file.path, req.file.originalname, req.file.size, uploaderName);
+        await fs.unlink(req.file.path).catch(() => {});
+
+        const fileInfo = {
+            ...fileData,
+            uploaderName
+        };
+
+        const channel = await client.channels.fetch(uploadInfo.channelId);
         await sendFilesToDiscord(channel, [fileInfo], []);
         
         res.json({ success: true });
@@ -529,6 +527,9 @@ client.once('clientReady', async () => {
     console.log(`✅ Bot logged in as ${client.user.tag}`);
     console.log(`📦 Chunked uploads enabled for files > ${(config.chunkThreshold / 1024 / 1024).toFixed(0)}MB`);
     console.log(`🔧 File server: ${config.fileServerUrl}`);
+    if (config.youtubeEnabled) {
+        console.log('🎥 YouTube upload mode is enabled for video files');
+    }
     
     // Register slash commands
     const commands = [
@@ -644,29 +645,16 @@ client.on('messageCreate', async (message) => {
                 const tempFilePath = path.join(tempDir, `${Date.now()}_${attachment.name}`);
                 await downloadFile(attachment.url, tempFilePath);
                 
-                console.log(`📤 Uploading to private server...`);
-                
-                let fileData;
-                if (attachment.size > config.chunkThreshold) {
-                    console.log(`📦 Using chunked upload (${Math.ceil(attachment.size / config.chunkSize)} chunks)`);
-                    fileData = await uploadChunkedToServer(tempFilePath, attachment.name, attachment.size);
-                    console.log(`📋 Chunked upload response:`, JSON.stringify(fileData, null, 2));
-                } else {
-                    fileData = await uploadToPrivateServer(tempFilePath, attachment.name);
-                }
-                
-                // Normalize response structure
-                uploadedFiles.push({
-                    url: fileData.url,
-                    fileUrl: fileData.fileUrl,
-                    previewUrl: fileData.previewUrl,
-                    name: fileData.originalName || attachment.name,
-                    size: fileData.size || attachment.size,
-                    uploaderName: message.author.tag,
-                    mimeType: fileData.mimeType
-                });
-                
-                console.log(`✅ Uploaded: ${fileData.url}`);
+                const fileData = await uploadFileWithRouting(
+                    tempFilePath,
+                    attachment.name,
+                    attachment.size,
+                    message.author.tag
+                );
+
+                uploadedFiles.push(fileData);
+
+                console.log(`✅ Uploaded: ${fileData.url || fileData.youtubeUrl || fileData.fileUrl}`);
                 
                 await fs.unlink(tempFilePath).catch(() => {});
                 
@@ -714,10 +702,10 @@ client.on('messageCreate', async (message) => {
 
 async function sendFilesToDiscord(channel, files, errors) {
     try {
-        console.log(`\n⏳ Waiting 5 seconds before posting to Discord...`);
+        console.log(`\n⏳ Waiting 2 minutes before posting to Discord...`);
 
-        // Wait 5 seconds
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Wait 2 minutes
+        await new Promise(resolve => setTimeout(resolve, 120000));
         
         console.log(`💬 Sending to Discord channel: ${channel.name}`);
         console.log(`   Files to send: ${files.length}`);
@@ -725,22 +713,28 @@ async function sendFilesToDiscord(channel, files, errors) {
         // Send each file URL with uploader name (automatically included in file object)
         for (const file of files) {
             console.log(`   📨 Sending URL for: ${file.name}`);
-            const previewLink = file.url || file.previewUrl || file.fileUrl;
-            const fullLink = file.fileUrl || file.url;
             const messageLines = [];
 
             if (file.uploaderName) {
                 messageLines.push(`**Uploaded by:** ${file.uploaderName}`);
             }
 
-            if (file.previewUrl || file.url) {
-                messageLines.push('This is a preview:');
-                messageLines.push(previewLink);
-            }
+            if (file.platform === 'youtube') {
+                messageLines.push('Watch on YouTube:');
+                messageLines.push(file.youtubeUrl || file.fileUrl || file.url);
+            } else {
+                const previewLink = file.url || file.previewUrl || file.fileUrl;
+                const fullLink = file.fileUrl || file.url;
 
-            if (fullLink) {
-                messageLines.push('Full version:');
-                messageLines.push(fullLink);
+                if (file.previewUrl || file.url) {
+                    messageLines.push('This is a preview:');
+                    messageLines.push(previewLink);
+                }
+
+                if (fullLink) {
+                    messageLines.push('Full version:');
+                    messageLines.push(fullLink);
+                }
             }
 
             const message = messageLines.join('\n');
@@ -757,6 +751,151 @@ async function sendFilesToDiscord(channel, files, errors) {
         console.error(`❌ Error sending to Discord:`, error);
         throw error;
     }
+}
+
+function isVideoFile(fileName, mimeType) {
+    if (mimeType && String(mimeType).startsWith('video/')) {
+        return true;
+    }
+
+    const ext = path.extname(fileName || '').toLowerCase();
+    return VIDEO_EXTENSIONS.has(ext);
+}
+
+function buildYouTubeClient() {
+    if (!config.youtubeClientId || !config.youtubeClientSecret || !config.youtubeRefreshToken) {
+        throw new Error('YouTube upload is enabled but OAuth credentials are missing');
+    }
+
+    const oauth2Client = new google.auth.OAuth2(
+        config.youtubeClientId,
+        config.youtubeClientSecret,
+        'https://developers.google.com/oauthplayground'
+    );
+
+    oauth2Client.setCredentials({
+        refresh_token: config.youtubeRefreshToken
+    });
+
+    return google.youtube({ version: 'v3', auth: oauth2Client });
+}
+
+function buildYouTubeTitle(originalName) {
+    const base = path.basename(originalName, path.extname(originalName));
+    const cleaned = base.replace(/[\r\n\t]+/g, ' ').trim() || 'Discord Upload';
+    return cleaned.slice(0, 100);
+}
+
+async function uploadVideoToYouTube(filePath, originalName, uploaderName) {
+    const youtube = buildYouTubeClient();
+    const stats = await fs.stat(filePath);
+    const title = buildYouTubeTitle(originalName);
+    const description = `Uploaded via Discord uploader by ${uploaderName || 'Unknown'} on ${new Date().toISOString()}.`;
+
+    console.log(`🎥 Uploading video to YouTube: ${originalName}`);
+
+    const response = await youtube.videos.insert({
+        part: ['snippet', 'status'],
+        requestBody: {
+            snippet: {
+                title,
+                description,
+                categoryId: config.youtubeCategoryId
+            },
+            status: {
+                privacyStatus: config.youtubePrivacyStatus,
+                selfDeclaredMadeForKids: false
+            }
+        },
+        media: {
+            body: fsSync.createReadStream(filePath)
+        }
+    });
+
+    const videoId = response?.data?.id;
+    if (!videoId) {
+        throw new Error('YouTube API did not return a video ID');
+    }
+
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const shortUrl = `https://youtu.be/${videoId}`;
+
+    return {
+        platform: 'youtube',
+        youtubeUrl: watchUrl,
+        url: shortUrl,
+        fileUrl: watchUrl,
+        previewUrl: null,
+        name: originalName,
+        size: stats.size,
+        mimeType: 'video/youtube'
+    };
+}
+
+async function deleteFromFileServer(filename) {
+    if (!filename) return;
+
+    await axios.delete(`${config.fileServerUrl}/api/files/${encodeURIComponent(filename)}`, {
+        headers: {
+            'X-API-Key': config.apiKey
+        }
+    });
+}
+
+function normalizeServerFileData(fileData, fallbackName, fallbackSize, uploaderName) {
+    return {
+        platform: 'file-server',
+        url: fileData.url,
+        fileUrl: fileData.fileUrl,
+        previewUrl: fileData.previewUrl,
+        name: fileData.originalName || fallbackName,
+        size: fileData.size || fallbackSize,
+        uploaderName,
+        mimeType: fileData.mimeType
+    };
+}
+
+async function mapServerFinalizeResultToTarget(serverData, uploaderName) {
+    const sourceName = serverData.originalName || serverData.filename || 'uploaded-file';
+
+    if (config.youtubeEnabled && isVideoFile(sourceName, serverData.mimeType)) {
+        if (!serverData.fileUrl) {
+            throw new Error('Expected fileUrl from server finalize response');
+        }
+
+        const tempYoutubePath = path.join(tempDir, `yt_${Date.now()}_${sourceName}`);
+        await downloadFile(serverData.fileUrl, tempYoutubePath);
+
+        try {
+            const youtubeData = await uploadVideoToYouTube(tempYoutubePath, sourceName, uploaderName);
+            youtubeData.uploaderName = uploaderName;
+            await deleteFromFileServer(serverData.filename).catch(() => {});
+            return youtubeData;
+        } finally {
+            await fs.unlink(tempYoutubePath).catch(() => {});
+        }
+    }
+
+    return normalizeServerFileData(serverData, sourceName, serverData.size, uploaderName);
+}
+
+async function uploadFileWithRouting(filePath, originalName, fileSize, uploaderName) {
+    if (config.youtubeEnabled && isVideoFile(originalName)) {
+        return uploadVideoToYouTube(filePath, originalName, uploaderName);
+    }
+
+    console.log(`📤 Uploading to private server...`);
+
+    let fileData;
+    if (fileSize > config.chunkThreshold) {
+        console.log(`📦 Using chunked upload (${Math.ceil(fileSize / config.chunkSize)} chunks)`);
+        fileData = await uploadChunkedToServer(filePath, originalName, fileSize);
+        console.log(`📋 Chunked upload response:`, JSON.stringify(fileData, null, 2));
+    } else {
+        fileData = await uploadToPrivateServer(filePath, originalName);
+    }
+
+    return normalizeServerFileData(fileData, originalName, fileSize, uploaderName);
 }
 
 async function downloadFile(url, filePath) {

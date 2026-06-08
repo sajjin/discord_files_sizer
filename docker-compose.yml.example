@@ -7,9 +7,9 @@ services:
     container_name: discord-file-server
     restart: unless-stopped
     ports:
-      - "51424:51424"
+      - "80:80"
     environment:
-      - PORT=51424
+      - PORT=
       - API_KEY=${API_KEY}
       - DOMAIN=${FILE_SERVER_URL}
       - NODE_ENV=production
@@ -27,7 +27,7 @@ services:
         reservations:
           memory: 2G
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:51424/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
       interval: 20s
       timeout: 5s
       retries: 2
@@ -44,7 +44,7 @@ services:
       - "8458:8458"
     environment:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
-      - FILE_SERVER_URL=http://file-server:51424
+      - FILE_SERVER_URL=http://file-server
       - FILE_SERVER_API_KEY=${API_KEY}
       - UPLOAD_PORT=8458
       - PUBLIC_UPLOAD_URL=${PUBLIC_UPLOAD_URL}
@@ -75,7 +75,7 @@ services:
         reservations:
           memory: 2G
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8458/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:/health"]
       interval: 20s
       timeout: 5s
       retries: 2
@@ -87,8 +87,8 @@ services:
     container_name: discord-apache-proxy
     restart: unless-stopped
     ports:
-      - "8880:80"
-      - "8443:443"
+      - "80:80"
+      - "443:443"
     volumes:
       - ./apache-discord-files.conf:/usr/local/apache2/conf/extra/discord-files.conf:ro
       - ./ssl:/usr/local/apache2/conf/ssl:ro
