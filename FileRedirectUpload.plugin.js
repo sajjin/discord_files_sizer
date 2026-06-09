@@ -258,7 +258,7 @@ module.exports = class FileRedirectUpload {
 	async directUpload(server, apiKey, file) {
 		const form = new FormData();
 		form.append("file", file, file.name);
-		const res = await fetch(`${server}/upload`, {
+		const res = await fetch(`${server}/plugin-upload`, {
 			method: "POST",
 			headers: { "X-API-Key": apiKey },
 			body: form
@@ -273,7 +273,7 @@ module.exports = class FileRedirectUpload {
 	}
 
 	async chunkedUpload(server, apiKey, file, chunkSize) {
-		const initRes = await fetch(`${server}/upload/init`, {
+		const initRes = await fetch(`${server}/plugin-upload/init`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -307,7 +307,7 @@ module.exports = class FileRedirectUpload {
 			const timeout = setTimeout(() => controller.abort(), 300000);
 
 			try {
-				const res = await fetch(`${server}/upload/chunk`, {
+				const res = await fetch(`${server}/plugin-upload/chunk`, {
 					method: "POST",
 					headers: {
 						"X-API-Key": apiKey,
@@ -347,7 +347,7 @@ module.exports = class FileRedirectUpload {
 			}
 		}
 
-		const finalizeRes = await fetch(`${server}/upload/finalize`, {
+		const finalizeRes = await fetch(`${server}/plugin-upload/finalize`, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",

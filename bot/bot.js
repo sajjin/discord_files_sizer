@@ -58,6 +58,18 @@ app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, X-Upload-ID, X-Chunk-Index, X-Total-Chunks');
+
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(204);
+    }
+
+    next();
+});
+
+app.use((req, res, next) => {
     req.setTimeout(300000); // 5 minutes
     res.setTimeout(300000);
     next();
@@ -72,6 +84,17 @@ const upload = multer({
 });
 
 const uploadTokens = new Map();
+const pluginUploads = new Map();
+
+const requireApiKey = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+
+    if (!apiKey || apiKey !== config.apiKey) {
+        return res.status(401).json({ success: false, error: 'Invalid or missing API key' });
+    }
+
+    next();
+};
 
 // Health check
 app.get('/health', (req, res) => {
@@ -396,6 +419,106 @@ app.get('/upload/:token', (req, res) => {
 });
 
 // Handle chunked upload initialization
+app.post('/plugin-upload/init', requireApiKey, async (req, res) => {
+    try {
+        const response = await axios.post(`${config.fileServerUrl}/upload/init`, req.body, {
+            headers: {
+                'X-API-Key': config.apiKey,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const uploadId = response.data?.uploadId;
+        if (uploadId) {
+            pluginUploads.set(uploadId, {
+                originalName: req.body?.fileName,
+                createdAt: Date.now()
+            });
+        }
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('Plugin init error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/plugin-upload/chunk', requireApiKey, upload.single('chunk'), async (req, res) => {
+    try {
+        const form = new FormData();
+        form.append('chunk', fsSync.createReadStream(req.file.path));
+
+        const response = await axios.post(`${config.fileServerUrl}/upload/chunk`, form, {
+            headers: {
+                ...form.getHeaders(),
+                'X-API-Key': config.apiKey,
+                'X-Upload-ID': req.headers['x-upload-id'],
+                'X-Chunk-Index': req.headers['x-chunk-index'],
+                'X-Total-Chunks': req.headers['x-total-chunks']
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+        });
+
+        await fs.unlink(req.file.path).catch(() => {});
+        res.json(response.data);
+    } catch (error) {
+        console.error('Plugin chunk error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/plugin-upload/finalize', requireApiKey, async (req, res) => {
+    try {
+        const response = await axios.post(`${config.fileServerUrl}/upload/finalize`, req.body, {
+            headers: {
+                'X-API-Key': config.apiKey,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const uploadId = req.body?.uploadId;
+        const pluginUpload = uploadId ? pluginUploads.get(uploadId) : null;
+        const fileInfo = await mapServerFinalizeResultToTarget(
+            response.data,
+            pluginUpload?.uploaderName || 'Plugin Upload'
+        );
+
+        if (uploadId) {
+            pluginUploads.delete(uploadId);
+        }
+
+        res.json({
+            success: true,
+            ...fileInfo
+        });
+    } catch (error) {
+        console.error('Plugin finalize error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/plugin-upload', requireApiKey, upload.single('file'), async (req, res) => {
+    try {
+        const fileData = await uploadFileWithRouting(
+            req.file.path,
+            req.file.originalname,
+            req.file.size,
+            'Plugin Upload'
+        );
+
+        await fs.unlink(req.file.path).catch(() => {});
+
+        res.json({
+            success: true,
+            ...fileData
+        });
+    } catch (error) {
+        console.error('Plugin upload error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.post('/upload/:token/init', async (req, res) => {
     const token = req.params.token;
     const uploadInfo = uploadTokens.get(token);
