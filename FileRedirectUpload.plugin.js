@@ -41,6 +41,7 @@ module.exports = class FileRedirectUpload {
 			this.settings = this.loadSettings();
 			this.messageActions = BdApi.Webpack.getModule(m => m?.sendMessage && m?.editMessage);
 			this.channelStore = BdApi.Webpack.getModule(m => m?.getLastSelectedChannelId && m?.getChannelId);
+			this.userStore = BdApi.Webpack.getModule(m => m?.getCurrentUser && typeof m.getCurrentUser === "function");
 
 			document.addEventListener("dragover", this.onDragOver, true);
 			document.addEventListener("drop", this.onDrop, true);
@@ -202,18 +203,36 @@ module.exports = class FileRedirectUpload {
 		const server = this.settings.serverUrl.replace(/\/$/, "");
 		const apiKey = this.settings.apiKey;
 		const chunkSize = Number(this.settings.chunkSize) || this.defaultSettings.chunkSize;
+		const uploaderName = this.getUploaderName();
 
 		if (!server || !apiKey) throw new Error("Server URL or API key missing");
 
-		return this.chunkedUpload(server, apiKey, file, chunkSize);
+		return this.chunkedUpload(server, apiKey, file, chunkSize, uploaderName);
+	}
+
+	getUploaderName() {
+		const user = this.userStore?.getCurrentUser?.();
+		if (!user) return "Plugin Upload";
+
+		if (user.discriminator && user.discriminator !== "0") {
+			return `${user.username}#${user.discriminator}`;
+		}
+
+		return user.globalName || user.username || "Plugin Upload";
 	}
 
 	buildBotStyleMessage(uploadResult) {
-		if (uploadResult.youtubeLink) {
-			return ["Watch on YouTube:", uploadResult.youtubeLink].join("\n");
+		const lines = [];
+
+		if (uploadResult.uploaderName) {
+			lines.push(`**Uploaded by:** ${uploadResult.uploaderName}`);
 		}
 
-		const lines = [];
+		if (uploadResult.youtubeLink) {
+			lines.push("Watch on YouTube:");
+			lines.push(uploadResult.youtubeLink);
+			return lines.join("\n");
+		}
 
 		if (uploadResult.previewLink) {
 			lines.push("This is a preview:");
@@ -229,6 +248,7 @@ module.exports = class FileRedirectUpload {
 	}
 
 	normalizeUploadResult(uploadData) {
+		const uploaderName = uploadData.uploaderName || uploadData.username || "";
 		const youtubeLink =
 			uploadData.youtubeUrl ||
 			uploadData.watchUrl ||
@@ -237,7 +257,7 @@ module.exports = class FileRedirectUpload {
 			(this.isYouTubeUrl(uploadData.previewUrl) ? uploadData.previewUrl : "");
 
 		if (youtubeLink) {
-			return { previewLink: youtubeLink, fullLink: youtubeLink, youtubeLink };
+			return { previewLink: youtubeLink, fullLink: youtubeLink, youtubeLink, uploaderName };
 		}
 
 		const previewLink = uploadData.url || uploadData.previewUrl || uploadData.fileUrl || "";
@@ -247,7 +267,7 @@ module.exports = class FileRedirectUpload {
 			throw new Error("No URL returned from server");
 		}
 
-		return { previewLink, fullLink };
+		return { previewLink, fullLink, uploaderName };
 	}
 
 	isYouTubeUrl(value) {
@@ -255,9 +275,10 @@ module.exports = class FileRedirectUpload {
 		return /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)/i.test(value);
 	}
 
-	async directUpload(server, apiKey, file) {
+	async directUpload(server, apiKey, file, uploaderName) {
 		const form = new FormData();
 		form.append("file", file, file.name);
+		form.append("uploaderName", uploaderName);
 		const res = await fetch(`${server}/plugin-upload`, {
 			method: "POST",
 			headers: { "X-API-Key": apiKey },
@@ -272,7 +293,7 @@ module.exports = class FileRedirectUpload {
 		return this.normalizeUploadResult(data);
 	}
 
-	async chunkedUpload(server, apiKey, file, chunkSize) {
+	async chunkedUpload(server, apiKey, file, chunkSize, uploaderName) {
 		const initRes = await fetch(`${server}/plugin-upload/init`, {
 			method: "POST",
 			headers: {
@@ -282,7 +303,8 @@ module.exports = class FileRedirectUpload {
 			body: JSON.stringify({
 				fileName: file.name,
 				fileSize: file.size,
-				totalChunks: Math.ceil(file.size / chunkSize)
+				totalChunks: Math.ceil(file.size / chunkSize),
+				uploaderName
 			})
 		});
 		if (!initRes.ok) throw new Error(`Init failed: ${initRes.status}`);

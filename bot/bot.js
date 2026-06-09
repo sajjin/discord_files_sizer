@@ -86,6 +86,12 @@ const upload = multer({
 const uploadTokens = new Map();
 const pluginUploads = new Map();
 
+const getPluginUploaderName = (payloadName) => {
+    if (typeof payloadName !== 'string') return 'Plugin Upload';
+    const trimmed = payloadName.trim();
+    return trimmed || 'Plugin Upload';
+};
+
 const requireApiKey = (req, res, next) => {
     const apiKey = req.headers['x-api-key'];
 
@@ -432,6 +438,7 @@ app.post('/plugin-upload/init', requireApiKey, async (req, res) => {
         if (uploadId) {
             pluginUploads.set(uploadId, {
                 originalName: req.body?.fileName,
+                uploaderName: getPluginUploaderName(req.body?.uploaderName),
                 createdAt: Date.now()
             });
         }
@@ -500,11 +507,12 @@ app.post('/plugin-upload/finalize', requireApiKey, async (req, res) => {
 
 app.post('/plugin-upload', requireApiKey, upload.single('file'), async (req, res) => {
     try {
+        const uploaderName = getPluginUploaderName(req.body?.uploaderName);
         const fileData = await uploadFileWithRouting(
             req.file.path,
             req.file.originalname,
             req.file.size,
-            'Plugin Upload'
+            uploaderName
         );
 
         await fs.unlink(req.file.path).catch(() => {});
@@ -913,7 +921,7 @@ async function uploadVideoToYouTube(filePath, originalName, uploaderName) {
     const youtube = buildYouTubeClient();
     const stats = await fs.stat(filePath);
     const title = buildYouTubeTitle(originalName);
-    const description = `Uploaded via Discord uploader by ${uploaderName || 'Unknown'} on ${new Date().toISOString()}.`;
+    const description = `Game clips by ${uploaderName || 'Unknown'} on ${new Date().toISOString()}.`;
 
     console.log(`🎥 Uploading video to YouTube: ${originalName}`);
 
