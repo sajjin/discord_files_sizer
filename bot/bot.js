@@ -10,6 +10,23 @@ const http = require('http');
 const https = require('https');
 const { google } = require('googleapis');
 
+function normalizeEnvValue(value) {
+    if (typeof value !== 'string') {
+        return value;
+    }
+
+    let normalized = value.trim();
+
+    if (
+        (normalized.startsWith('"') && normalized.endsWith('"')) ||
+        (normalized.startsWith("'") && normalized.endsWith("'"))
+    ) {
+        normalized = normalized.slice(1, -1).trim();
+    }
+
+    return normalized;
+}
+
 // Configuration
 const config = {
     botToken: process.env.DISCORD_BOT_TOKEN,
@@ -28,9 +45,9 @@ const config = {
     maxFileSize: parseInt(process.env.MAX_FILE_SIZE) || 5000,
 
     youtubeEnabled: process.env.YOUTUBE_UPLOAD_ENABLED === 'true',
-    youtubeClientId: process.env.YOUTUBE_CLIENT_ID,
-    youtubeClientSecret: process.env.YOUTUBE_CLIENT_SECRET,
-    youtubeRefreshToken: process.env.YOUTUBE_REFRESH_TOKEN,
+    youtubeClientId: normalizeEnvValue(process.env.YOUTUBE_CLIENT_ID),
+    youtubeClientSecret: normalizeEnvValue(process.env.YOUTUBE_CLIENT_SECRET),
+    youtubeRefreshToken: normalizeEnvValue(process.env.YOUTUBE_REFRESH_TOKEN),
     youtubePrivacyStatus: process.env.YOUTUBE_PRIVACY_STATUS || 'unlisted',
     youtubeCategoryId: process.env.YOUTUBE_CATEGORY_ID || '22'
 };
@@ -893,7 +910,40 @@ function isVideoFile(fileName, mimeType) {
     return VIDEO_EXTENSIONS.has(ext);
 }
 
-function buildYouTubeClient() {
+function isYouTubeInvalidGrantError(error) {
+    const message = String(error?.message || '').toLowerCase();
+    const responseData = error?.response?.data;
+    const responseError = String(responseData?.error || '').toLowerCase();
+    const responseDescription = String(responseData?.error_description || '').toLowerCase();
+
+    return message.includes('invalid_grant') ||
+        responseError.includes('invalid_grant') ||
+        responseDescription.includes('invalid_grant');
+}
+
+function getYouTubeAuthHint(error) {
+    if (!isYouTubeInvalidGrantError(error)) {
+        return null;
+    }
+
+    return 'YouTube OAuth refresh token is invalid or revoked. Re-generate YOUTUBE_REFRESH_TOKEN using the same OAuth client ID/secret and ensure your OAuth consent screen is in Production.';
+}
+
+function logYouTubeErrorContext(error, originalName) {
+    const baseMessage = error?.message || 'Unknown YouTube upload error';
+    const hint = getYouTubeAuthHint(error);
+    console.error(`❌ YouTube upload failed for ${originalName}: ${baseMessage}`);
+
+    if (hint) {
+        console.error(`   Hint: ${hint}`);
+    }
+
+    if (error?.response?.data) {
+        console.error(`   YouTube API response: ${JSON.stringify(error.response.data)}`);
+    }
+}
+
+function buildYouTubeOAuthClient() {
     if (!config.youtubeClientId || !config.youtubeClientSecret || !config.youtubeRefreshToken) {
         throw new Error('YouTube upload is enabled but OAuth credentials are missing');
     }
@@ -908,7 +958,28 @@ function buildYouTubeClient() {
         refresh_token: config.youtubeRefreshToken
     });
 
+    return oauth2Client;
+}
+
+function buildYouTubeClient() {
+    const oauth2Client = buildYouTubeOAuthClient();
+
     return google.youtube({ version: 'v3', auth: oauth2Client });
+}
+
+async function validateYouTubeCredentialsOnStartup() {
+    if (!config.youtubeEnabled) {
+        return;
+    }
+
+    try {
+        const oauth2Client = buildYouTubeOAuthClient();
+        await oauth2Client.getAccessToken();
+        console.log('✅ YouTube OAuth credentials validated');
+    } catch (error) {
+        logYouTubeErrorContext(error, 'startup-check');
+        console.error('⚠️  YouTube uploads will fall back to file-server links until credentials are fixed.');
+    }
 }
 
 function buildYouTubeTitle(originalName) {
@@ -918,49 +989,54 @@ function buildYouTubeTitle(originalName) {
 }
 
 async function uploadVideoToYouTube(filePath, originalName, uploaderName) {
-    const youtube = buildYouTubeClient();
-    const stats = await fs.stat(filePath);
-    const title = buildYouTubeTitle(originalName);
-    const description = `Game clips by ${uploaderName || 'Unknown'} on ${new Date().toISOString()}.`;
+    try {
+        const youtube = buildYouTubeClient();
+        const stats = await fs.stat(filePath);
+        const title = buildYouTubeTitle(originalName);
+        const description = `Game clips by ${uploaderName || 'Unknown'} on ${new Date().toISOString()}.`;
 
-    console.log(`🎥 Uploading video to YouTube: ${originalName}`);
+        console.log(`🎥 Uploading video to YouTube: ${originalName}`);
 
-    const response = await youtube.videos.insert({
-        part: ['snippet', 'status'],
-        requestBody: {
-            snippet: {
-                title,
-                description,
-                categoryId: config.youtubeCategoryId
+        const response = await youtube.videos.insert({
+            part: ['snippet', 'status'],
+            requestBody: {
+                snippet: {
+                    title,
+                    description,
+                    categoryId: config.youtubeCategoryId
+                },
+                status: {
+                    privacyStatus: config.youtubePrivacyStatus,
+                    selfDeclaredMadeForKids: false
+                }
             },
-            status: {
-                privacyStatus: config.youtubePrivacyStatus,
-                selfDeclaredMadeForKids: false
+            media: {
+                body: fsSync.createReadStream(filePath)
             }
-        },
-        media: {
-            body: fsSync.createReadStream(filePath)
+        });
+
+        const videoId = response?.data?.id;
+        if (!videoId) {
+            throw new Error('YouTube API did not return a video ID');
         }
-    });
 
-    const videoId = response?.data?.id;
-    if (!videoId) {
-        throw new Error('YouTube API did not return a video ID');
+        const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+        const shortUrl = `https://youtu.be/${videoId}`;
+
+        return {
+            platform: 'youtube',
+            youtubeUrl: watchUrl,
+            url: shortUrl,
+            fileUrl: watchUrl,
+            previewUrl: null,
+            name: originalName,
+            size: stats.size,
+            mimeType: 'video/youtube'
+        };
+    } catch (error) {
+        logYouTubeErrorContext(error, originalName);
+        throw error;
     }
-
-    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const shortUrl = `https://youtu.be/${videoId}`;
-
-    return {
-        platform: 'youtube',
-        youtubeUrl: watchUrl,
-        url: shortUrl,
-        fileUrl: watchUrl,
-        previewUrl: null,
-        name: originalName,
-        size: stats.size,
-        mimeType: 'video/youtube'
-    };
 }
 
 async function deleteFromFileServer(filename) {
@@ -988,6 +1064,7 @@ function normalizeServerFileData(fileData, fallbackName, fallbackSize, uploaderN
 
 async function mapServerFinalizeResultToTarget(serverData, uploaderName) {
     const sourceName = serverData.originalName || serverData.filename || 'uploaded-file';
+    const fallbackFileData = normalizeServerFileData(serverData, sourceName, serverData.size, uploaderName);
 
     if (config.youtubeEnabled && isVideoFile(sourceName, serverData.mimeType)) {
         if (!serverData.fileUrl) {
@@ -1002,17 +1079,24 @@ async function mapServerFinalizeResultToTarget(serverData, uploaderName) {
             youtubeData.uploaderName = uploaderName;
             await deleteFromFileServer(serverData.filename).catch(() => {});
             return youtubeData;
+        } catch (error) {
+            console.error(`⚠️ Falling back to file-server links for ${sourceName}`);
+            return fallbackFileData;
         } finally {
             await fs.unlink(tempYoutubePath).catch(() => {});
         }
     }
 
-    return normalizeServerFileData(serverData, sourceName, serverData.size, uploaderName);
+    return fallbackFileData;
 }
 
 async function uploadFileWithRouting(filePath, originalName, fileSize, uploaderName) {
     if (config.youtubeEnabled && isVideoFile(originalName)) {
-        return uploadVideoToYouTube(filePath, originalName, uploaderName);
+        try {
+            return await uploadVideoToYouTube(filePath, originalName, uploaderName);
+        } catch (error) {
+            console.error(`⚠️ Falling back to private file server for ${originalName}`);
+        }
     }
 
     console.log(`📤 Uploading to private server...`);
@@ -1233,6 +1317,10 @@ process.on('SIGINT', async () => {
 });
 
 init().then(() => {
+    validateYouTubeCredentialsOnStartup().catch((error) => {
+        console.error('YouTube startup validation failed:', error.message);
+    });
+
     client.login(config.botToken).catch((error) => {
         console.error('❌ Failed to login:', error.message);
         process.exit(1);
